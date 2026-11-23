@@ -34,6 +34,21 @@
             <option value="chrom">Kromatik (zor)</option>
           </select>
         </label>
+        <label>Cevap
+          <select id="mAnswer">
+            <option value="keys">Piyano / klavye ile</option>
+            <option value="voice">🎤 Sesle (söyleyerek)</option>
+          </select>
+        </label>
+        <label>Ritim
+          <select id="mRhythm">
+            <option value="even">Düz (hep dörtlük)</option>
+            <option value="simple" selected>Basit (dörtlük, sekizlik, ikilik)</option>
+            <option value="dotted">Noktalı (+ noktalı nota, senkop)</option>
+            <option value="mixed">Karışık (+ on altılık, üçleme)</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="mCount" checked> Giriş vuruşu (1 ölçü)</label>
         <label class="check"><input type="checkbox" id="mAuto" checked> Otomatik seviye atla</label>
         <label class="check"><input type="checkbox" id="mShow"> Çalarken tuşları göster</label>
       </div>
@@ -44,7 +59,17 @@
         <button id="mRef">Do sesini ver</button>
       </div>
 
+      <p id="mVoiceHint" class="voice-hint" hidden>
+        🎤 Ezgi bitince mikrofon açılır; duyduğunu “la” ya da “na” hecesiyle söyle.
+        Kendi ses aralığında söyleyebilirsin: ilk notana göre oktav ayarlanır.
+        Aynı nota üst üste geliyorsa araya kısa bir boşluk bırak.
+      </p>
+
       <div id="mSlots" class="slots"></div>
+      <div id="mMic" class="mic-live">
+        <span>🎤 Duyulan:</span> <b id="mMicNote">–</b>
+        <span class="meter"><i id="mMicLevel"></i></span>
+      </div>
       <p id="mMsg" class="msg">“Yeni ezgi”ye bas, dinle, sonra piyanoda aynısını çal.</p>
 
       <div id="piano" class="piano"></div>

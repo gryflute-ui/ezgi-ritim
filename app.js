@@ -26,21 +26,73 @@ function killBus(bus) { try { bus && bus.disconnect(); } catch (_) {} }
 
 const midiToFreq = m => 440 * Math.pow(2, (m - 69) / 12);
 
-// Piyano benzeri basit ton
+/* --- Piyano sesi (sentez) ---
+   Ses dosyası kullanmadan, internetsiz çalışır:
+   - harmonikleri zengin bir dalga + hafif akortsuz ikinci tel (koro etkisi)
+   - zamanla kapanan alçak geçiren süzgeç (ses önce parlak, sonra yumuşar)
+   - iki aşamalı sönüm (hızlı ilk düşüş + uzun kuyruk)
+   - çekiç vuruşu için kısa bir gürültü patlaması
+   - nota bitince "susturucu" (damper) ile kısa bırakış */
+let pianoWave = null, noiseBuf = null;
+function pianoParts() {
+  const a = audio();
+  if (!pianoWave) {
+    const N = 16, real = new Float32Array(N + 1), imag = new Float32Array(N + 1);
+    for (let n = 1; n <= N; n++) {
+      // Çekiç teli ~1/7 noktasından vurur: o harmonikler zayıf kalır
+      const strike = Math.abs(Math.sin(Math.PI * n / 7)) * 0.8 + 0.2;
+      imag[n] = strike / Math.pow(n, 1.1);
+    }
+    pianoWave = a.createPeriodicWave(real, imag);
+    const len = Math.floor(a.sampleRate * 0.05);
+    noiseBuf = a.createBuffer(1, len, a.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  }
+  return { wave: pianoWave, noise: noiseBuf };
+}
+
 function tone(midi, when, dur = 0.45, vol = 0.3, dest = audio().destination) {
   const a = audio();
+  const { wave, noise } = pianoParts();
   const f = midiToFreq(midi);
-  const o1 = a.createOscillator(), o2 = a.createOscillator();
-  const g = a.createGain(), g2 = a.createGain();
-  o1.type = 'triangle'; o1.frequency.value = f;
-  o2.type = 'sine'; o2.frequency.value = f * 2;
-  g2.gain.value = 0.15;
-  g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(vol, when + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-  o1.connect(g); o2.connect(g2).connect(g); g.connect(dest);
-  o1.start(when); o2.start(when);
-  o1.stop(when + dur + 0.05); o2.stop(when + dur + 0.05);
+  const end = when + Math.max(dur, 0.12);         // susturucunun indiği an
+  const decay = 1.6 * Math.pow(261.6 / f, 0.5);   // pes notalar daha uzun çınlar
+
+  const out = a.createGain();
+  out.gain.setValueAtTime(0.0001, when);
+  out.gain.exponentialRampToValueAtTime(vol, when + 0.004);
+  out.gain.setTargetAtTime(vol * 0.35, when + 0.004, 0.09);  // ilk hızlı düşüş
+  out.gain.setTargetAtTime(0.0001, when + 0.3, decay);        // uzun kuyruk
+  out.gain.cancelScheduledValues(end);
+  out.gain.setTargetAtTime(0.0001, end, 0.07);                // bırakış
+  out.connect(dest);
+
+  const lp = a.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.Q.value = 0.5;
+  lp.frequency.setValueAtTime(Math.min(f * 14, 16000), when);
+  lp.frequency.setTargetAtTime(Math.min(f * 3, 8000), when + 0.01, 0.35);
+  lp.connect(out);
+
+  const stopAt = end + 0.5;
+  [-1.5, 1.5].forEach(cents => {
+    const o = a.createOscillator();
+    o.setPeriodicWave(wave);
+    o.frequency.value = f;
+    o.detune.value = cents;
+    const g = a.createGain(); g.gain.value = 0.5;
+    o.connect(g).connect(lp);
+    o.start(when); o.stop(stopAt);
+  });
+
+  // Çekiç sesi
+  const n = a.createBufferSource(); n.buffer = noise;
+  const bp = a.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = Math.min(f * 4, 6000); bp.Q.value = 1.2;
+  const ng = a.createGain(); ng.gain.value = vol * 0.25;
+  n.connect(bp).connect(ng).connect(dest);
+  n.start(when);
 }
 
 // Metronom tıkı
@@ -105,6 +157,42 @@ const SCALES = {
   chrom: [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72]
 };
 
+// Ritim kalıpları: her hücre bir ya da iki vuruşu doldurur (süreler vuruş cinsinden).
+// Hücreler hep tam vuruşta biter, böylece ezgi vuruşa oturur.
+const T = 1 / 3;
+const RCELLS = {
+  even:   [[1]],
+  simple: [[1], [1], [0.5, 0.5], [2]],
+  dotted: [[1], [0.5, 0.5], [2], [1.5, 0.5], [0.75, 0.25], [0.5, 1, 0.5]],
+  mixed:  [[1], [0.5, 0.5], [2], [1.5, 0.5], [0.75, 0.25], [0.5, 1, 0.5],
+           [0.25, 0.25, 0.5], [0.5, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25], [T, T, T]]
+};
+
+function genDurations(n, style) {
+  const cells = RCELLS[style] || RCELLS.even;
+  let best = null;
+  for (let tries = 0; tries < 30; tries++) {
+    const out = [];
+    // Son nota hariç hepsini tam hücrelerle doldur (kalıplar yarıda kesilmesin)
+    while (out.length < n - 1) {
+      const fit = cells.filter(c => c.length <= n - 1 - out.length);
+      out.push(...pick(fit));
+    }
+    // Son nota vuruş başında başlar, en az bir vuruş sürer (ezgi "bitmiş" duyulsun)
+    out.push(style === 'even' ? 1 : pick([1, 1, 2]));
+    best = out;
+    // Düz olmayan stillerde en az bir farklı süre olsun
+    if (style === 'even' || n < 2 || out.slice(0, -1).some(d => d !== 1)) break;
+  }
+  return best;
+}
+
+function durName(d) {
+  if (Math.abs(d - T) < 0.01) return 'üçleme sekizlik';
+  return ({ 2: 'ikilik', 1.5: 'noktalı dörtlük', 1: 'dörtlük', 0.75: 'noktalı sekizlik',
+            0.5: 'sekizlik', 0.25: 'on altılık' })[d] || `${d} vuruş`;
+}
+
 // Fiziksel tuş konumuna göre (klavye düzeninden bağımsız)
 const KEYMAP = {
   KeyA: 60, KeyW: 61, KeyS: 62, KeyE: 63, KeyD: 64, KeyF: 65, KeyT: 66,
@@ -116,7 +204,7 @@ const mBpm = bindRange('mBpm');
 const mMsg = $('mMsg');
 
 const M = {
-  target: [], input: [], phase: 'idle', revealed: false,
+  target: [], durs: [], input: [], phase: 'idle', revealed: false,
   score: store.get('mScore', 0), streak: 0, best: store.get('mBest', 0),
   timers: [], bus: null
 };
@@ -159,15 +247,24 @@ function renderSlots() {
     const d = document.createElement('div');
     d.className = 'slot';
     const inp = M.input[i];
+    let label = '?';
     if (inp !== undefined) {
-      d.textContent = noteName(inp);
+      label = noteName(inp);
       d.classList.add(inp === t ? 'ok' : 'bad');
     } else if (M.revealed) {
-      d.textContent = noteName(t);
+      label = noteName(t);
       d.classList.add('reveal');
-    } else {
-      d.textContent = '?';
     }
+    const name = document.createElement('span');
+    name.textContent = label;
+    d.appendChild(name);
+    // Notanın süresini gösteren çubuk (2 vuruş = tam genişlik)
+    const dur = M.durs[i] || 1;
+    const bar = document.createElement('i');
+    bar.className = 'dur';
+    bar.style.width = Math.min(100, dur * 50) + '%';
+    d.title = durName(dur);
+    d.appendChild(bar);
     box.appendChild(d);
   });
 }
@@ -193,6 +290,7 @@ function genMelody(n, scale) {
 function stopMelody() {
   M.timers.forEach(clearTimeout); M.timers = [];
   killBus(M.bus); M.bus = null;
+  stopListening();
 }
 
 function playMelody() {
@@ -200,45 +298,72 @@ function playMelody() {
   const a = audio();
   M.bus = newBus();
   const beat = 60 / +mBpm.value;
-  const lead = 0.15;
+  // Giriş: bir ölçü (4 vuruş) metronom, ezgi ondan sonra başlar
+  const countIn = $('mCount').checked ? 4 : 0;
+  const lead = 0.15 + countIn * beat;
   const t0 = a.currentTime + lead;
+  for (let i = 0; i < countIn; i++) {
+    click(t0 - (countIn - i) * beat, i === 0 ? 1600 : 1100, 0.08, M.bus);
+  }
   M.phase = 'playing'; M.input = []; M.revealed = false;
   renderSlots();
-  setMsg(mMsg, '🎧 Dinle…');
+  setMsg(mMsg, countIn ? '🎧 Dinle… (4 vuruş giriş)' : '🎧 Dinle…');
+
+  let pos = 0; // vuruş cinsinden konum
   M.target.forEach((m, i) => {
-    tone(m, t0 + i * beat, Math.min(beat * 0.95, 0.9), 0.3, M.bus);
+    const d = M.durs[i] || 1;
+    // Legato: nota bir sonrakine kadar sürer (son nota biraz daha uzun çınlar)
+    const len = d * beat * (i === M.target.length - 1 ? 1.3 : 0.98);
+    tone(m, t0 + pos * beat, len, 0.32, M.bus);
     if ($('mShow').checked) {
-      M.timers.push(setTimeout(() => flashKey(m, beat * 800), (lead + i * beat) * 1000));
+      M.timers.push(setTimeout(() => flashKey(m, Math.max(120, d * beat * 850)), (lead + pos * beat) * 1000));
     }
+    pos += d;
   });
-  M.timers.push(setTimeout(() => {
-    M.phase = 'answering';
-    setMsg(mMsg, '🎹 Şimdi sen çal!', 'info');
-  }, (lead + (M.target.length - 0.3) * beat) * 1000));
+  const lastD = M.durs[M.target.length - 1] || 1;
+  if (voiceMode()) {
+    // Mikrofon, ezginin son notası tamamen sönünce açılır (hoparlör sesi algılanmasın)
+    const tMic = lead + (pos + lastD * 0.3) * beat + 0.4;
+    M.timers.push(setTimeout(startListening, tMic * 1000));
+  } else {
+    M.timers.push(setTimeout(() => {
+      M.phase = 'answering';
+      setMsg(mMsg, '🎹 Şimdi sen çal!', 'info');
+    }, (lead + (pos - lastD * 0.3) * beat) * 1000));
+  }
 }
 
 function newMelody() {
   M.target = genMelody(+mLen.value, SCALES[$('mScale').value]);
+  M.durs = genDurations(M.target.length, $('mRhythm').value);
   $('mReplay').disabled = false;
   playMelody();
 }
 
 function pressNote(m) {
   if (M.phase === 'playing') return;
+  // Sesle cevap verilirken piyano susar (mikrofon onu da duyardı)
+  if (voiceMode() && M.phase === 'answering') return;
   tone(m, audio().currentTime);
   flashKey(m);
   if (M.phase !== 'answering') return;
+  answerNote(m);
+}
 
+// Bir cevap notasını değerlendirir (klavyeden ya da sesten gelir)
+function answerNote(m) {
   const i = M.input.length;
   M.input.push(m);
+  const verb = voiceMode() ? 'söyledin' : 'çaldın';
 
   if (m !== M.target[i]) {
     M.phase = 'idle';
+    stopListening();
     M.streak = 0;
     M.revealed = true;
     renderSlots();
     setMsg(mMsg,
-      `✗ ${i + 1}. nota yanlış: ${noteName(m)} çaldın, doğrusu ${noteName(M.target[i])}. ` +
+      `✗ ${i + 1}. nota yanlış: ${noteName(m)} ${verb}, doğrusu ${noteName(M.target[i])}. ` +
       `“Tekrar dinle / dene” ile yeniden deneyebilirsin.`, 'bad');
     updateMStats();
     return;
@@ -247,6 +372,7 @@ function pressNote(m) {
   renderSlots();
   if (M.input.length === M.target.length) {
     M.phase = 'idle';
+    stopListening();
     M.score++; M.streak++;
     M.best = Math.max(M.best, M.streak);
     let extra = '';
@@ -260,9 +386,238 @@ function pressNote(m) {
   }
 }
 
+/* =========================================================
+   SESLE CEVAP (mikrofon)
+   Öğrenci duyduğu ezgiyi söyler; perde YIN yöntemiyle bulunur,
+   sesler notalara bölünür ve sırayla değerlendirilir.
+   ========================================================= */
+const voiceMode = () => $('mAnswer').value === 'voice';
+const micLive = $('mMic'), micNote = $('mMicNote'), micLevel = $('mMicLevel');
+
+const V = {
+  stream: null, src: null, an: null, buf: null, timer: null,
+  octave: null,        // öğrencinin oktav kayması (erkek sesi 1 oktav pes söyleyebilir)
+  cur: null,           // şu an süren (kabul edilmiş) nota
+  cand: null,          // nota olmaya aday ses parçası
+  gap: 0,              // art arda sessiz kare sayısı
+  prev: null,          // bir önceki karenin perdesi
+  lastNoteAt: 0, muteUntil: 0
+};
+const SHORT_NOTE = 0.05; // bir sesin nota sayılması için en kısa süre (sn); kısa notalar bitince kabul edilir
+const LONG_NOTE = 0.2;   // bu kadar süren ses, bitmesi beklenmeden nota olarak kabul edilir
+const SILENCE_END = 5;   // bu kadar saniye ses gelmezse cevap bitmiş sayılır
+
+// YIN perde bulma. Sonuç Hz ya da -1 (ses yok / güvenilmez).
+function yinPitch(x, sr) {
+  const W = 1024;
+  const tauMin = Math.floor(sr / 1100), tauMax = Math.min(Math.floor(sr / 65), x.length - W - 1);
+  const d = new Float32Array(tauMax + 1);
+  for (let tau = 1; tau <= tauMax; tau++) {
+    let s = 0;
+    for (let j = 0; j < W; j++) { const v = x[j] - x[j + tau]; s += v * v; }
+    d[tau] = s;
+  }
+  // Toplamsal ortalamayla normalleştir (YIN'in 3. adımı)
+  d[0] = 1;
+  let run = 0;
+  for (let tau = 1; tau <= tauMax; tau++) {
+    run += d[tau];
+    d[tau] = run ? d[tau] * tau / run : 1;
+  }
+  let tau = -1;
+  for (let t = tauMin + 1; t < tauMax; t++) {
+    if (d[t] < 0.15) {
+      while (t + 1 < tauMax && d[t + 1] < d[t]) t++;
+      tau = t; break;
+    }
+  }
+  if (tau < 0) return -1;
+  const a = d[tau - 1], b = d[tau], c = d[tau + 1];
+  const den = a + c - 2 * b;
+  const t0 = den ? tau + (a - c) / (2 * den) : tau;
+  return sr / t0;
+}
+
+async function openMic() {
+  if (V.stream) return true;
+  try {
+    // Tarayıcının ses işlemeleri perdeyi bozmasın diye kapatılır
+    V.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+  } catch (_) {
+    setMsg(mMsg, '🎤 Mikrofona erişilemedi. Tarayıcıda mikrofon izni ver ve tekrar dene.', 'bad');
+    return false;
+  }
+  const a = audio();
+  V.src = a.createMediaStreamSource(V.stream);
+  V.an = a.createAnalyser();
+  V.an.fftSize = 2048;
+  V.buf = new Float32Array(V.an.fftSize);
+  V.src.connect(V.an); // hoparlöre bağlanmaz, yalnızca dinlenir
+  return true;
+}
+
+function closeMic() {
+  stopListening();
+  if (!V.stream) return;
+  V.src.disconnect();
+  V.stream.getTracks().forEach(t => t.stop());
+  V.stream = null;
+}
+
+async function startListening() {
+  if (!(await openMic())) { M.phase = 'idle'; return; }
+  stopListening();
+  M.phase = 'answering';
+  V.octave = null; V.cur = null; V.cand = null; V.gap = 0; V.prev = null;
+  V.lastNoteAt = audio().currentTime;
+  micLive.classList.add('on');
+  micNote.textContent = '–';
+  setMsg(mMsg, '🎤 Şimdi söyle! (aynı nota tekrar ediyorsa araya kısa bir boşluk bırak)', 'info');
+  V.timer = setInterval(listenFrame, 20);
+}
+
+function stopListening() {
+  clearInterval(V.timer); V.timer = null;
+  micLive.classList.remove('on');
+  micLevel.style.width = '0%';
+}
+
+function listenFrame() {
+  if (M.phase !== 'answering') { stopListening(); return; }
+  const a = audio(), now = a.currentTime;
+  V.an.getFloatTimeDomainData(V.buf);
+
+  let rms = 0;
+  for (let i = 0; i < V.buf.length; i++) rms += V.buf[i] * V.buf[i];
+  rms = Math.sqrt(rms / V.buf.length);
+  micLevel.style.width = Math.min(100, rms * 600) + '%';
+
+  const f = (rms > 0.01 && now >= V.muteUntil) ? yinPitch(V.buf, a.sampleRate) : -1;
+
+  if (f < 0) {
+    // Sessizlik: 3 kare (~60 ms) sürerse nota biter, sonraki ses yeni notadır
+    if (++V.gap >= 3) {
+      closeCand();
+      V.cur = null; V.prev = null;
+      micNote.textContent = '–';
+      if (M.phase !== 'answering') return; // son nota az önce kabul edildi
+    }
+    if (now - V.lastNoteAt > SILENCE_END) {
+      M.phase = 'idle';
+      stopListening();
+      M.streak = 0; M.revealed = true;
+      renderSlots(); updateMStats();
+      const n = M.input.length;
+      setMsg(mMsg, n
+        ? `⏱ Ezgi yarım kaldı: ${M.target.length} notadan ${n} tanesini söyledin. Doğrusu yukarıda.`
+        : '⏱ Ses algılanmadı. Mikrofonu kontrol edip “Tekrar dinle / dene”ye bas.', 'bad');
+    }
+    return;
+  }
+  V.gap = 0;
+  const midi = 69 + 12 * Math.log2(f / 440);
+
+  // Canlı gösterge: duyulan nota ve sapması
+  const r = Math.round(midi), cents = Math.round((midi - r) * 100);
+  micNote.textContent = `${NAMES[((r % 12) + 12) % 12]} ${cents >= 0 ? '+' : '−'}${Math.abs(cents)} sent`;
+
+  const c = V.cand, cur = V.cur;
+  // Ani sıçrama: iki kare arasında ≥0,7 yarım ses → yeni nota başlıyor
+  // (vibrato bu kadar hızlı değişmez)
+  const jump = V.prev !== null && Math.abs(midi - V.prev) >= 0.7;
+  V.prev = midi;
+  // Aday notaya uyuyor mu? Aralık 1,6 yarım sese kadar olabilir:
+  // vibrato notayı bölmesin, ama kayışlar (glissando) nota sayılmasın.
+  const fitsCand = !jump && c && Math.max(c.hi, midi) - Math.min(c.lo, midi) < 1.6;
+  // Süren notanın içinde mi? (vibrato, küçük kayma)
+  const nearCur = !jump && cur && Math.abs(midi - cur.ref) < 0.85;
+
+  if (fitsCand && (!nearCur || Math.abs(midi - trimMean(c.p)) <= Math.abs(midi - cur.ref))) {
+    c.p.push(midi); c.last = now; c.miss = 0;
+    c.hi = Math.max(c.hi, midi); c.lo = Math.min(c.lo, midi);
+    // Uzun nota: bir vibrato döngüsü kadar dinlendikten sonra hemen kabul edilir
+    if (now - c.start >= LONG_NOTE) closeCand();
+  } else if (nearCur) {
+    cur.p.push(midi);
+    if (cur.p.length > 25) cur.p.shift();
+    cur.ref = trimMean(cur.p);
+    V.lastNoteAt = now;
+    if (c && ++c.miss >= 2) closeCand();
+  } else {
+    closeCand();
+    V.cand = { p: [midi], hi: midi, lo: midi, start: now, last: now, miss: 0 };
+  }
+}
+
+// Aday notayı kapatır: yeterince uzun sürdüyse nota olarak kabul edilir.
+function closeCand() {
+  const c = V.cand;
+  V.cand = null;
+  if (!c || c.last - c.start < SHORT_NOTE) return;
+  // Kayış (glissando) mı? Perde tek yöne belirgin biçimde değiştiyse nota sayılmaz.
+  // (Vibrato bir aşağı bir yukarı gider; toplam eğimi küçüktür.)
+  if (Math.abs(drift(c.p)) > 0.9) return;
+  const p = c.p.length > 3 ? c.p.slice(1) : c.p; // ilk kare çoğu zaman kaymadır
+  const sung = trimMean(p);
+  V.lastNoteAt = c.last;
+  // Ses kesilmeden aynı perdede devam ediyorsa yeni nota değil, süren notanın devamıdır
+  // (aynı notayı tekrar söylemek için araya sessizlik gerekir)
+  if (V.cur && Math.abs(sung - V.cur.ref) < 0.5) {
+    V.cur.p.push(...p);
+    V.cur.p.splice(0, Math.max(0, V.cur.p.length - 25));
+    return;
+  }
+  V.cur = { ref: sung, p };
+  commitSung(sung);
+}
+
+// Doğrusal eğilim: kareler boyunca perdenin toplam değişimi (yarım ses)
+function drift(p) {
+  const n = p.length;
+  if (n < 3) return 0;
+  const mx = (n - 1) / 2, my = p.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0;
+  p.forEach((y, x) => { sxy += (x - mx) * (y - my); sxx += (x - mx) * (x - mx); });
+  return (sxy / sxx) * (n - 1);
+}
+
+// Uç değerleri atıp ortalama al (vibrato simetrik olduğundan merkezi verir)
+function trimMean(arr) {
+  const s = [...arr].sort((p, q) => p - q);
+  const k = Math.floor(s.length / 5);
+  const mid = s.slice(k, s.length - k || undefined);
+  return mid.reduce((a, b) => a + b, 0) / mid.length;
+}
+
+function commitSung(sung) {
+  const i = M.input.length;
+  // Oktav: ilk notada öğrencinin hangi oktavda söylediğine bakılır,
+  // sonra bütün ezgi o oktava göre değerlendirilir (aralıklar korunur).
+  if (V.octave === null) V.octave = Math.round((sung - M.target[i]) / 12);
+  const m = Math.round(sung - 12 * V.octave);
+  flashKey(m, 250);
+  answerNote(m);
+}
+
+$('mAnswer').addEventListener('change', () => {
+  stopMelody();
+  if (M.phase === 'answering') M.phase = 'idle';
+  $('mVoiceHint').hidden = !voiceMode();
+  if (voiceMode()) openMic(); // izni şimdiden iste
+  else closeMic();
+});
+$('mVoiceHint').hidden = !voiceMode();
+
 $('mNew').addEventListener('click', newMelody);
 $('mReplay').addEventListener('click', () => { if (M.target.length) playMelody(); });
-$('mRef').addEventListener('click', () => { tone(60, audio().currentTime, 0.9); flashKey(60, 600); });
+$('mRef').addEventListener('click', () => {
+  tone(60, audio().currentTime, 0.9); flashKey(60, 600);
+  // Sesle cevap sırasında referans sesi algılanmasın
+  V.muteUntil = audio().currentTime + 1.4;
+  V.cur = null; V.cand = null;
+});
 
 renderSlots();
 updateMStats();

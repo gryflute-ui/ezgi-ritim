@@ -97,6 +97,7 @@ button.primary:hover { background: #5677f0; }
 /* ---------- Ezgi slotları ---------- */
 .slots { display: flex; flex-wrap: wrap; gap: 8px; min-height: 52px; }
 .slot {
+  position: relative;
   width: 58px; height: 48px;
   display: grid; place-items: center;
   border-radius: 8px;
@@ -107,6 +108,44 @@ button.primary:hover { background: #5677f0; }
 .slot.ok { border: 2px solid var(--good); color: var(--good); }
 .slot.bad { border: 2px solid var(--bad); color: var(--bad); }
 .slot.reveal { border: 2px solid var(--warn); color: var(--warn); }
+/* Nota süresi çubuğu: 2 vuruş = tam genişlik */
+.slot .dur {
+  position: absolute;
+  left: 4px; bottom: 4px;
+  max-width: calc(100% - 8px);
+  height: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: .55;
+}
+
+/* ---------- Sesle cevap ---------- */
+.voice-hint {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--card);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.5;
+}
+.mic-live {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+}
+.mic-live.on { display: flex; }
+.mic-live b { color: var(--warn); min-width: 9ch; }
+.mic-live .meter {
+  width: 140px; height: 8px;
+  background: var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.mic-live .meter i { display: block; height: 100%; width: 0; background: var(--good); transition: width .05s; }
 
 /* ---------- Piyano ---------- */
 .piano {

@@ -16,8 +16,23 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 ## Nasıl kullanılır?
 
 ### Ezgi Tekrarı
-- **Yeni ezgi**: Program rastgele bir ezgi çalar.
-- Ezgiyi ekrandaki piyanoda ya da klavyeyle tekrar et:
+- **Yeni ezgi**: Program rastgele bir ezgiyi piyano sesiyle çalar.
+- **Ritim**: Ezginin ritim kalıbı seçilir:
+  - *Düz*: bütün notalar dörtlük
+  - *Basit*: dörtlük, sekizlik, ikilik
+  - *Noktalı*: + noktalı dörtlük, noktalı sekizlik, senkop (sekizlik–dörtlük–sekizlik)
+  - *Karışık*: + on altılık kalıpları ve üçleme
+  Her notanın altındaki çubuk süresini gösterir (tam genişlik = 2 vuruş). Değerlendirmede yalnızca notaların perdesine bakılır.
+- **Giriş vuruşu**: Ezgiden önce 1 ölçülük (4 vuruş) metronom çalar; ritmi kavramayı kolaylaştırır.
+- **Cevap → 🎤 Sesle**: Ezgi bitince mikrofon açılır, öğrenci duyduğunu söyler.
+  - "la" ya da "na" hecesiyle söylemek en iyi sonucu verir.
+  - Kendi ses aralığında söyleyebilir: ilk notaya göre oktav ayarlanır (ör. erkek sesi bir oktav pes), sonraki notalar bu oktava göre değerlendirilir.
+  - Perdede yarım sesin yarısına kadar (±50 sent) sapma kabul edilir; vibrato ve notalar arasındaki kayışlar sorun olmaz.
+  - Aynı nota üst üste geliyorsa araya kısa bir sessizlik bırakılmalıdır.
+  - Ekranda o an duyulan nota ve sapması (sent) ile ses düzeyi gösterilir.
+  - 5 saniye ses gelmezse cevap bitmiş sayılır.
+  - Hoparlörle de çalışır: mikrofon, ezginin sesi tamamen bitince açılır.
+- **Cevap → Piyano / klavye**: Ezgiyi ekrandaki piyanoda ya da klavyeyle tekrar et:
   `A W S E D F T G Y H U J K` = Do, Do#, Re, … , Do'
 - Her doğru nota yeşil, yanlış nota kırmızı görünür. Hata yaparsan doğru ezgi gösterilir.
 - Art arda 3 doğruda nota sayısı otomatik olarak 1 artar (ayardan kapatılabilir).
@@ -43,5 +58,5 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 
 - `app.js` içindeki `SCALES` nesnesine yeni diziler ekle (ör. minör, makamlar).
 - Piyanoyu iki oktava genişlet (`WHITES` ve `BLACKS`).
-- Mikrofonla söylenen ezgiyi algılama (perde tespiti) ekle.
+- Sesle cevapta ritmi de değerlendir (her notanın başladığı an `closeCand` içinde zaten ölçülüyor).
 - Ritim için 3/4 ya da 6/8 ölçü seçeneği ekle.
