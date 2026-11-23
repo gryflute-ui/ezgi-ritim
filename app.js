@@ -124,7 +124,8 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('ert_' + k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
   set(k, v) { try { localStorage.setItem('ert_' + k, JSON.stringify(v)); } catch (_) {} }
 };
-const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+// rng: rastgele sayı üreteci (sınavda herkes aynı soruları alsın diye tohumlu olabilir)
+const pick = (arr, rng = Math.random) => arr[Math.floor(rng() * arr.length)];
 
 function bindRange(id) {
   const el = $(id), out = $(id + 'Val');
@@ -139,11 +140,12 @@ document.querySelectorAll('button').forEach(b => b.addEventListener('click', () 
 
 /* ---------------- Sekmeler ---------------- */
 let activeTab = 'melody';
-document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
-  activeTab = b.dataset.tab;
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
-  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === activeTab));
-}));
+function setTab(name) {
+  activeTab = name;
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === name));
+}
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
 /* =========================================================
    EZGİ TEKRARI
@@ -168,7 +170,7 @@ const RCELLS = {
            [0.25, 0.25, 0.5], [0.5, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25], [T, T, T]]
 };
 
-function genDurations(n, style) {
+function genDurations(n, style, rng = Math.random) {
   const cells = RCELLS[style] || RCELLS.even;
   let best = null;
   for (let tries = 0; tries < 30; tries++) {
@@ -176,10 +178,10 @@ function genDurations(n, style) {
     // Son nota hariç hepsini tam hücrelerle doldur (kalıplar yarıda kesilmesin)
     while (out.length < n - 1) {
       const fit = cells.filter(c => c.length <= n - 1 - out.length);
-      out.push(...pick(fit));
+      out.push(...pick(fit, rng));
     }
     // Son nota vuruş başında başlar, en az bir vuruş sürer (ezgi "bitmiş" duyulsun)
-    out.push(style === 'even' ? 1 : pick([1, 1, 2]));
+    out.push(style === 'even' ? 1 : pick([1, 1, 2], rng));
     best = out;
     // Düz olmayan stillerde en az bir farklı süre olsun
     if (style === 'even' || n < 2 || out.slice(0, -1).some(d => d !== 1)) break;
@@ -277,14 +279,47 @@ function updateMStats() {
   store.set('mBest', M.best);
 }
 
-function genMelody(n, scale) {
-  const out = [pick(scale)];
+function genMelody(n, scale, rng = Math.random) {
+  const out = [pick(scale, rng)];
   while (out.length < n) {
     const prev = out[out.length - 1];
     // Çok büyük sıçramaları engelle (en fazla tam beşli)
-    out.push(pick(scale.filter(x => Math.abs(x - prev) <= 7)));
+    out.push(pick(scale.filter(x => Math.abs(x - prev) <= 7), rng));
   }
   return out;
+}
+
+/* Bir ezgiyi çalar. Zamanlar (saniye, şimdiden itibaren) döner:
+   keysAt: klavyeyle cevabın açılacağı an, micAt: mikrofonun açılacağı an
+   (son nota tamamen sönünce, hoparlör sesi algılanmasın),
+   notes: [midi, süre(sn), başlama(sn)] — tuş yakmak için. */
+function playSeq(target, durs, { bpm, countIn = 0, refDo = false, bus }) {
+  const a = audio();
+  const beat = 60 / bpm;
+  let lead = 0.15;
+  if (refDo) { tone(60, a.currentTime + lead, 1.0, 0.32, bus); lead += 1.8; }
+  const t0 = a.currentTime + lead + countIn * beat;
+  // Giriş: bir ölçü (4 vuruş) metronom, ezgi ondan sonra başlar
+  for (let i = 0; i < countIn; i++) {
+    click(t0 - (countIn - i) * beat, i === 0 ? 1600 : 1100, 0.08, bus);
+  }
+  lead += countIn * beat;
+  let pos = 0; // vuruş cinsinden konum
+  const notes = [];
+  target.forEach((m, i) => {
+    const d = durs[i] || 1;
+    // Legato: nota bir sonrakine kadar sürer (son nota biraz daha uzun çınlar)
+    const len = d * beat * (i === target.length - 1 ? 1.3 : 0.98);
+    tone(m, t0 + pos * beat, len, 0.32, bus);
+    notes.push([m, d * beat, lead + pos * beat]);
+    pos += d;
+  });
+  const lastD = durs[target.length - 1] || 1;
+  return {
+    keysAt: lead + (pos - lastD * 0.3) * beat,
+    micAt: lead + (pos + lastD * 0.3) * beat + 0.4,
+    notes
+  };
 }
 
 function stopMelody() {
@@ -295,41 +330,24 @@ function stopMelody() {
 
 function playMelody() {
   stopMelody();
-  const a = audio();
   M.bus = newBus();
-  const beat = 60 / +mBpm.value;
-  // Giriş: bir ölçü (4 vuruş) metronom, ezgi ondan sonra başlar
   const countIn = $('mCount').checked ? 4 : 0;
-  const lead = 0.15 + countIn * beat;
-  const t0 = a.currentTime + lead;
-  for (let i = 0; i < countIn; i++) {
-    click(t0 - (countIn - i) * beat, i === 0 ? 1600 : 1100, 0.08, M.bus);
-  }
   M.phase = 'playing'; M.input = []; M.revealed = false;
   renderSlots();
   setMsg(mMsg, countIn ? '🎧 Dinle… (4 vuruş giriş)' : '🎧 Dinle…');
 
-  let pos = 0; // vuruş cinsinden konum
-  M.target.forEach((m, i) => {
-    const d = M.durs[i] || 1;
-    // Legato: nota bir sonrakine kadar sürer (son nota biraz daha uzun çınlar)
-    const len = d * beat * (i === M.target.length - 1 ? 1.3 : 0.98);
-    tone(m, t0 + pos * beat, len, 0.32, M.bus);
-    if ($('mShow').checked) {
-      M.timers.push(setTimeout(() => flashKey(m, Math.max(120, d * beat * 850)), (lead + pos * beat) * 1000));
-    }
-    pos += d;
-  });
-  const lastD = M.durs[M.target.length - 1] || 1;
+  const p = playSeq(M.target, M.durs, { bpm: +mBpm.value, countIn, bus: M.bus });
+  if ($('mShow').checked) {
+    p.notes.forEach(([m, len, at]) =>
+      M.timers.push(setTimeout(() => flashKey(m, Math.max(120, len * 850)), at * 1000)));
+  }
   if (voiceMode()) {
-    // Mikrofon, ezginin son notası tamamen sönünce açılır (hoparlör sesi algılanmasın)
-    const tMic = lead + (pos + lastD * 0.3) * beat + 0.4;
-    M.timers.push(setTimeout(startListening, tMic * 1000));
+    M.timers.push(setTimeout(startMelodyListening, p.micAt * 1000));
   } else {
     M.timers.push(setTimeout(() => {
       M.phase = 'answering';
       setMsg(mMsg, '🎹 Şimdi sen çal!', 'info');
-    }, (lead + (pos - lastD * 0.3) * beat) * 1000));
+    }, p.keysAt * 1000));
   }
 }
 
@@ -341,6 +359,7 @@ function newMelody() {
 }
 
 function pressNote(m) {
+  if (activeTab === 'exam') { examKey(m); return; }
   if (M.phase === 'playing') return;
   // Sesle cevap verilirken piyano susar (mikrofon onu da duyardı)
   if (voiceMode() && M.phase === 'answering') return;
@@ -392,10 +411,13 @@ function answerNote(m) {
    sesler notalara bölünür ve sırayla değerlendirilir.
    ========================================================= */
 const voiceMode = () => $('mAnswer').value === 'voice';
-const micLive = $('mMic'), micNote = $('mMicNote'), micLevel = $('mMicLevel');
 
 const V = {
   stream: null, src: null, an: null, buf: null, timer: null,
+  // Dinlemeyi kullanan bölüm (Ezgi sekmesi ya da Sınav):
+  //   ref(): sıradaki beklenen nota (oktav tahmini için), onNote(m), onTimeout()
+  handler: null,
+  ui: null,            // { live, note, level } canlı gösterge öğeleri
   octave: null,        // öğrencinin oktav kayması (erkek sesi 1 oktav pes söyleyebilir)
   cur: null,           // şu an süren (kabul edilmiş) nota
   cand: null,          // nota olmaya aday ses parçası
@@ -446,7 +468,6 @@ async function openMic() {
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
   } catch (_) {
-    setMsg(mMsg, '🎤 Mikrofona erişilemedi. Tarayıcıda mikrofon izni ver ve tekrar dene.', 'bad');
     return false;
   }
   const a = audio();
@@ -466,33 +487,34 @@ function closeMic() {
   V.stream = null;
 }
 
-async function startListening() {
-  if (!(await openMic())) { M.phase = 'idle'; return; }
+// Mikrofonu açar ve dinlemeye başlar. Mikrofon açılamazsa false döner.
+async function startListening(handler, ui) {
+  if (!(await openMic())) return false;
   stopListening();
-  M.phase = 'answering';
+  V.handler = handler; V.ui = ui;
   V.octave = null; V.cur = null; V.cand = null; V.gap = 0; V.prev = null;
   V.lastNoteAt = audio().currentTime;
-  micLive.classList.add('on');
-  micNote.textContent = '–';
-  setMsg(mMsg, '🎤 Şimdi söyle! (aynı nota tekrar ediyorsa araya kısa bir boşluk bırak)', 'info');
+  ui.live.classList.add('on');
+  ui.note.textContent = '–';
   V.timer = setInterval(listenFrame, 20);
+  return true;
 }
 
 function stopListening() {
   clearInterval(V.timer); V.timer = null;
-  micLive.classList.remove('on');
-  micLevel.style.width = '0%';
+  V.handler = null;
+  if (V.ui) { V.ui.live.classList.remove('on'); V.ui.level.style.width = '0%'; }
 }
 
 function listenFrame() {
-  if (M.phase !== 'answering') { stopListening(); return; }
+  if (!V.handler) { stopListening(); return; }
   const a = audio(), now = a.currentTime;
   V.an.getFloatTimeDomainData(V.buf);
 
   let rms = 0;
   for (let i = 0; i < V.buf.length; i++) rms += V.buf[i] * V.buf[i];
   rms = Math.sqrt(rms / V.buf.length);
-  micLevel.style.width = Math.min(100, rms * 600) + '%';
+  V.ui.level.style.width = Math.min(100, rms * 600) + '%';
 
   const f = (rms > 0.01 && now >= V.muteUntil) ? yinPitch(V.buf, a.sampleRate) : -1;
 
@@ -501,18 +523,13 @@ function listenFrame() {
     if (++V.gap >= 3) {
       closeCand();
       V.cur = null; V.prev = null;
-      micNote.textContent = '–';
-      if (M.phase !== 'answering') return; // son nota az önce kabul edildi
+      if (!V.handler) return; // son nota az önce kabul edildi, dinleme bitti
+      V.ui.note.textContent = '–';
     }
     if (now - V.lastNoteAt > SILENCE_END) {
-      M.phase = 'idle';
+      const h = V.handler;
       stopListening();
-      M.streak = 0; M.revealed = true;
-      renderSlots(); updateMStats();
-      const n = M.input.length;
-      setMsg(mMsg, n
-        ? `⏱ Ezgi yarım kaldı: ${M.target.length} notadan ${n} tanesini söyledin. Doğrusu yukarıda.`
-        : '⏱ Ses algılanmadı. Mikrofonu kontrol edip “Tekrar dinle / dene”ye bas.', 'bad');
+      h.onTimeout();
     }
     return;
   }
@@ -521,7 +538,7 @@ function listenFrame() {
 
   // Canlı gösterge: duyulan nota ve sapması
   const r = Math.round(midi), cents = Math.round((midi - r) * 100);
-  micNote.textContent = `${NAMES[((r % 12) + 12) % 12]} ${cents >= 0 ? '+' : '−'}${Math.abs(cents)} sent`;
+  V.ui.note.textContent = `${NAMES[((r % 12) + 12) % 12]} ${cents >= 0 ? '+' : '−'}${Math.abs(cents)} sent`;
 
   const c = V.cand, cur = V.cur;
   // Ani sıçrama: iki kare arasında ≥0,7 yarım ses → yeni nota başlıyor
@@ -592,13 +609,38 @@ function trimMean(arr) {
 }
 
 function commitSung(sung) {
-  const i = M.input.length;
+  if (!V.handler) return;
   // Oktav: ilk notada öğrencinin hangi oktavda söylediğine bakılır,
   // sonra bütün ezgi o oktava göre değerlendirilir (aralıklar korunur).
-  if (V.octave === null) V.octave = Math.round((sung - M.target[i]) / 12);
+  if (V.octave === null) V.octave = Math.round((sung - V.handler.ref()) / 12);
   const m = Math.round(sung - 12 * V.octave);
   flashKey(m, 250);
-  answerNote(m);
+  V.handler.onNote(m);
+}
+
+// Ezgi sekmesinde sesle cevabı başlatır
+const melodyMicUI = { live: $('mMic'), note: $('mMicNote'), level: $('mMicLevel') };
+async function startMelodyListening() {
+  const ok = await startListening({
+    ref: () => M.target[Math.min(M.input.length, M.target.length - 1)],
+    onNote: answerNote,
+    onTimeout: () => {
+      M.phase = 'idle';
+      M.streak = 0; M.revealed = true;
+      renderSlots(); updateMStats();
+      const n = M.input.length;
+      setMsg(mMsg, n
+        ? `⏱ Ezgi yarım kaldı: ${M.target.length} notadan ${n} tanesini söyledin. Doğrusu yukarıda.`
+        : '⏱ Ses algılanmadı. Mikrofonu kontrol edip “Tekrar dinle / dene”ye bas.', 'bad');
+    }
+  }, melodyMicUI);
+  if (!ok) {
+    M.phase = 'idle';
+    setMsg(mMsg, '🎤 Mikrofona erişilemedi. Tarayıcıda mikrofon izni ver ve tekrar dene.', 'bad');
+    return;
+  }
+  M.phase = 'answering';
+  setMsg(mMsg, '🎤 Şimdi söyle! (aynı nota tekrar ediyorsa araya kısa bir boşluk bırak)', 'info');
 }
 
 $('mAnswer').addEventListener('change', () => {
@@ -858,14 +900,447 @@ $('tapPad').addEventListener('pointerdown', e => { e.preventDefault(); tap(); })
 updateRStats();
 
 /* =========================================================
+   SINAV
+   - Öğretmen ayarları seçer, bir sınav kodu belirler ve öğrenci bağlantısı oluşturur.
+   - Aynı kod + aynı ayarlar → herkes aynı soruları alır (tohumlu rastgele üreteç).
+   - Sınav sırasında doğru/yanlış gösterilmez; dinleme hakkı sınırlıdır.
+   - Puan: her soruda (nota sayısı − düzeltme uzaklığı) / nota sayısı.
+   ========================================================= */
+const CANON_URL = 'https://gryflute-ui.github.io/ezgi-ritim/';
+const exMsg = $('exMsg');
+const examMicUI = { live: $('exMic'), note: $('exMicNote'), level: $('exMicLevel') };
+
+const E = {
+  cfg: null, items: [], i: 0,
+  state: 'idle',   // idle | ready | playing | answering | answered
+  listens: 0, answer: [], timers: [], bus: null,
+  student: null, locked: false
+};
+
+/* --- Tohumlu rastgele sayı üreteci --- */
+function hashStr(s) {
+  let h = 1779033703 ^ s.length;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return h >>> 0;
+}
+function mulberry32(a) {
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function randomCode() {
+  const A = 'ABCDEFGHJKLMNPRSTUVYZ23456789';
+  return Array.from({ length: 5 }, () => A[Math.floor(Math.random() * A.length)]).join('');
+}
+
+/* --- Ayarlar: form ↔ nesne ↔ bağlantı --- */
+const clampInt = (v, lo, hi, d) => { v = parseInt(v, 10); return isNaN(v) ? d : Math.max(lo, Math.min(hi, v)); };
+
+function readCfg() {
+  let nmin = clampInt($('exNmin').value, 2, 10, 3), nmax = clampInt($('exNmax').value, 2, 10, 6);
+  if (nmax < nmin) [nmin, nmax] = [nmax, nmin];
+  let code = $('exCode').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!code) code = randomCode();
+  const c = {
+    code,
+    q: clampInt($('exQ').value, 1, 40, 10),
+    nmin, nmax,
+    scale: SCALES[$('exScale').value] ? $('exScale').value : 'major',
+    rhythm: RCELLS[$('exRhythm').value] ? $('exRhythm').value : 'simple',
+    bpm: clampInt($('exBpm').value, 50, 160, 80),
+    listens: clampInt($('exListens').value, 1, 3, 2),
+    answer: $('exAnswer').value === 'keys' ? 'keys' : 'voice',
+    refDo: $('exDo').checked,
+    countIn: $('exCount').checked
+  };
+  writeCfg(c); // düzeltilmiş değerleri forma geri yaz
+  return c;
+}
+
+function writeCfg(c) {
+  $('exCode').value = c.code; $('exQ').value = c.q;
+  $('exNmin').value = c.nmin; $('exNmax').value = c.nmax;
+  $('exScale').value = c.scale; $('exRhythm').value = c.rhythm;
+  $('exBpm').value = c.bpm; $('exListens').value = c.listens;
+  $('exAnswer').value = c.answer;
+  $('exDo').checked = c.refDo; $('exCount').checked = c.countIn;
+}
+
+// Bağlantıdaki adlar (Türkçe, kısa)
+const QKEYS = { code: 'kod', q: 'soru', nmin: 'enaz', nmax: 'encok', scale: 'dizi', rhythm: 'ritim',
+                bpm: 'tempo', listens: 'hak', answer: 'cevap', refDo: 'do', countIn: 'giris' };
+
+function cfgToQuery(c) {
+  const p = new URLSearchParams({ sinav: '1' });
+  for (const [k, q] of Object.entries(QKEYS)) p.set(q, typeof c[k] === 'boolean' ? (c[k] ? '1' : '0') : c[k]);
+  return p.toString();
+}
+
+function cfgFromQuery() {
+  const p = new URLSearchParams(location.search);
+  if (!p.has('sinav')) return null;
+  const g = (k, d) => p.has(QKEYS[k]) ? p.get(QKEYS[k]) : d;
+  return {
+    code: g('code', ''), q: g('q', 10), nmin: g('nmin', 3), nmax: g('nmax', 6),
+    scale: g('scale', 'major'), rhythm: g('rhythm', 'simple'), bpm: g('bpm', 80),
+    listens: g('listens', 2), answer: g('answer', 'voice'),
+    refDo: g('refDo', '1') === '1', countIn: g('countIn', '1') === '1'
+  };
+}
+
+function buildItems(c) {
+  // Sorular yalnızca bu ayarlara bağlıdır (tempo ve dinleme hakkı soruları değiştirmez)
+  const rng = mulberry32(hashStr(JSON.stringify([c.code, c.q, c.nmin, c.nmax, c.scale, c.rhythm])));
+  return Array.from({ length: c.q }, (_, i) => {
+    // Nota sayısı sorular boyunca en azdan en çoğa doğru artar
+    const n = Math.round(c.nmin + (c.nmax - c.nmin) * (c.q > 1 ? i / (c.q - 1) : 0));
+    const target = genMelody(n, SCALES[c.scale], rng);
+    return { target, durs: genDurations(n, c.rhythm, rng), answer: [] };
+  });
+}
+
+/* --- Puanlama: düzeltme uzaklığı (Levenshtein) ve hizalama --- */
+function align(t, a) {
+  const n = t.length, m = a.length;
+  const D = Array.from({ length: n + 1 }, (_, i) => Array.from({ length: m + 1 }, (_, j) => i + j));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      D[i][j] = Math.min(D[i - 1][j] + 1, D[i][j - 1] + 1, D[i - 1][j - 1] + (t[i - 1] === a[j - 1] ? 0 : 1));
+    }
+  }
+  // Geriye doğru izleyip işlemleri çıkar
+  const ops = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && D[i][j] === D[i - 1][j - 1] + (t[i - 1] === a[j - 1] ? 0 : 1)) {
+      ops.push({ op: t[i - 1] === a[j - 1] ? 'ok' : 'bad', t: t[i - 1], a: a[j - 1] }); i--; j--;
+    } else if (j > 0 && D[i][j] === D[i][j - 1] + 1) {
+      ops.push({ op: 'extra', a: a[j - 1] }); j--;
+    } else {
+      ops.push({ op: 'skip', t: t[i - 1] }); i--;
+    }
+  }
+  return { dist: D[n][m], ops: ops.reverse() };
+}
+const itemScore = it => Math.max(0, it.target.length - align(it.target, it.answer).dist) / it.target.length;
+
+/* --- Piyanoyu sınav ekranına taşıma --- */
+const pianoBox = $('pianoBox');
+const pianoHome = pianoBox.parentNode, pianoNext = pianoBox.nextSibling;
+const restorePiano = () => pianoHome.insertBefore(pianoBox, pianoNext);
+
+/* --- Sınav akışı --- */
+const exItem = () => E.items[E.i];
+
+function renderExSlots() {
+  const box = $('exSlots');
+  box.innerHTML = '';
+  exItem().target.forEach((_, i) => {
+    const d = document.createElement('div');
+    d.className = 'slot' + (i < E.answer.length ? ' filled' : '');
+    d.textContent = i < E.answer.length ? '●' : '';
+    box.appendChild(d);
+  });
+}
+
+function setPlayBtn() {
+  const b = $('exPlay');
+  b.textContent = E.listens > 0 ? `▶ Dinle (${E.listens} hak kaldı)` : 'Dinleme hakkın bitti';
+  b.disabled = E.listens <= 0 || E.state === 'playing';
+}
+
+function stopExamAudio() {
+  E.timers.forEach(clearTimeout); E.timers = [];
+  killBus(E.bus); E.bus = null;
+  stopListening();
+}
+
+async function startExam() {
+  const name = $('exName').value.trim();
+  if (!name) { setMsg($('exSetupMsg'), 'Lütfen adını ve soyadını yaz.', 'bad'); $('exName').focus(); return; }
+  E.cfg = readCfg();
+  stopMelody(); cancelRhythm();
+
+  if (E.cfg.answer === 'voice' && !(await openMic())) {
+    setMsg($('exSetupMsg'), '🎤 Mikrofona erişilemedi. Tarayıcıda mikrofon izni verip tekrar dene.', 'bad');
+    return;
+  }
+  setMsg($('exSetupMsg'), '');
+  E.student = { name, no: $('exNo').value.trim() };
+  E.items = buildItems(E.cfg);
+  E.i = 0;
+
+  // Sınav süresince diğer sekmeler kapalı; sayfadan çıkarken uyarı
+  document.querySelectorAll('.tab').forEach(b => { b.disabled = b.dataset.tab !== 'exam'; });
+  window.onbeforeunload = e => { e.preventDefault(); return ''; };
+  if (E.cfg.answer === 'keys') $('exPianoHost').appendChild(pianoBox);
+
+  $('exSetup').hidden = true; $('exResult').hidden = true; $('exRun').hidden = false;
+  $('exWho').textContent = name + (E.student.no ? ` (${E.student.no})` : '');
+  $('exTotal').textContent = E.items.length;
+  showQuestion();
+}
+
+function showQuestion() {
+  stopExamAudio();
+  E.listens = E.cfg.listens; E.answer = []; E.state = 'ready';
+  $('exNum').textContent = E.i + 1;
+  $('exProg').style.width = (E.i / E.items.length * 100) + '%';
+  $('exRedo').disabled = true;
+  $('exNext').disabled = true;
+  $('exNext').textContent = E.i === E.items.length - 1 ? 'Sınavı bitir ✓' : 'Sonraki soru →';
+  setPlayBtn();
+  renderExSlots();
+  setMsg(exMsg, `Hazır olunca “Dinle”ye bas. ${exItem().target.length} notalık bir ezgi; ` +
+    `${E.cfg.listens} kez dinleyebilirsin.` + (E.cfg.refDo ? ' Ezgiden önce Do sesi verilir.' : ''));
+}
+
+function examPlay() {
+  if (E.listens <= 0 || E.state === 'playing') return;
+  stopExamAudio();
+  E.listens--; E.answer = []; E.state = 'playing';
+  setPlayBtn(); renderExSlots();
+  $('exRedo').disabled = true; $('exNext').disabled = true;
+  setMsg(exMsg, E.cfg.refDo ? '🎧 Önce Do sesi, sonra ezgi… Dinle.' : '🎧 Dinle…');
+  E.bus = newBus();
+  const it = exItem();
+  const p = playSeq(it.target, it.durs, { bpm: E.cfg.bpm, countIn: E.cfg.countIn ? 4 : 0, refDo: E.cfg.refDo, bus: E.bus });
+  E.timers.push(setTimeout(beginAnswer, (E.cfg.answer === 'voice' ? p.micAt : p.keysAt) * 1000));
+}
+
+async function beginAnswer() {
+  E.state = 'answering';
+  setPlayBtn();
+  $('exNext').disabled = false;
+  $('exRedo').disabled = E.answer.length === 0;
+  if (E.cfg.answer === 'keys') { setMsg(exMsg, '🎹 Şimdi piyanoda çal.', 'info'); return; }
+  const it = exItem();
+  const ok = await startListening({
+    ref: () => it.target[Math.min(E.answer.length, it.target.length - 1)],
+    onNote: examNote,
+    onTimeout: () => finishAnswer(E.answer.length
+      ? `Cevabın kaydedildi (${E.answer.length}/${it.target.length} nota).`
+      : 'Ses algılanmadı. “Cevabı sil, yeniden cevapla” ile tekrar söyleyebilirsin.')
+  }, examMicUI);
+  if (!ok) { E.state = 'answered'; setMsg(exMsg, '🎤 Mikrofona erişilemedi.', 'bad'); return; }
+  setMsg(exMsg, '🎤 Şimdi söyle! (aynı nota tekrar ediyorsa araya kısa bir boşluk bırak)', 'info');
+}
+
+function examNote(m) {
+  if (E.state !== 'answering') return;
+  E.answer.push(m);
+  renderExSlots();
+  $('exRedo').disabled = false;
+  if (E.answer.length >= exItem().target.length) finishAnswer('✓ Cevabın kaydedildi.');
+}
+
+function finishAnswer(text) {
+  stopListening();
+  E.state = 'answered';
+  setPlayBtn();
+  $('exRedo').disabled = false;
+  $('exNext').disabled = false;
+  const last = E.i === E.items.length - 1;
+  setMsg(exMsg, `${text} ${last ? '“Sınavı bitir”e bas.' : '“Sonraki soru”ya geç.'}`, E.answer.length ? 'good' : 'bad');
+}
+
+function examRedo() {
+  if (E.state !== 'answering' && E.state !== 'answered') return;
+  stopListening();
+  E.answer = [];
+  renderExSlots();
+  beginAnswer();
+}
+
+function examKey(m) {
+  if (E.state === 'idle' || E.state === 'playing') return;
+  // Sesle cevapta piyano susar (mikrofon onu da duyardı)
+  if (E.cfg.answer === 'voice' && E.state === 'answering') return;
+  tone(m, audio().currentTime);
+  flashKey(m);
+  if (E.cfg.answer === 'keys') examNote(m);
+}
+
+function examNext() {
+  if (E.state === 'playing' || E.state === 'ready') return;
+  const n = exItem().target.length;
+  if (E.answer.length < n &&
+      !confirm(`Bu soruda ${n} notadan ${E.answer.length} tanesini cevapladın. Yine de geçmek istiyor musun?`)) return;
+  stopExamAudio();
+  exItem().answer = E.answer.slice();
+  E.i++;
+  if (E.i >= E.items.length) finishExam();
+  else showQuestion();
+}
+
+function finishExam() {
+  stopExamAudio();
+  E.state = 'idle';
+  if (!voiceMode()) closeMic(); // tarayıcının "mikrofon açık" işareti sönsün
+  restorePiano();
+  document.querySelectorAll('.tab').forEach(b => { b.disabled = false; });
+  window.onbeforeunload = null;
+
+  const scores = E.items.map(itemScore);
+  const rec = {
+    name: E.student.name, no: E.student.no,
+    date: new Date().toISOString(),
+    code: E.cfg.code, cfg: E.cfg,
+    score: Math.round(100 * scores.reduce((a, b) => a + b, 0) / scores.length),
+    items: E.items.map((it, i) => ({ t: it.target, d: it.durs, a: it.answer, s: scores[i] }))
+  };
+  const all = store.get('exams', []);
+  all.push(rec);
+  store.set('exams', all);
+  showResult(rec);
+}
+
+/* --- Sonuç ekranı --- */
+let shownRec = null;
+function showResult(rec) {
+  shownRec = rec;
+  $('exSetup').hidden = true; $('exRun').hidden = true; $('exResult').hidden = false;
+  $('exRName').textContent = rec.name + (rec.no ? ` (${rec.no})` : '');
+  $('exRMeta').textContent = `${new Date(rec.date).toLocaleString('tr-TR')} · Sınav kodu ${rec.code} · ` +
+    `${rec.items.length} soru · ${rec.cfg.answer === 'voice' ? 'sesle cevap' : 'piyanoyla cevap'}`;
+  $('exRScore').textContent = rec.score;
+
+  const body = $('exRBody');
+  body.innerHTML = '';
+  rec.items.forEach((it, i) => {
+    const tr = document.createElement('tr');
+    const td = txt => { const c = document.createElement('td'); if (txt !== undefined) c.textContent = txt; tr.appendChild(c); return c; };
+    td(i + 1);
+    td(it.t.map(noteName).join(' '));
+    const ans = td();
+    if (!it.a.length) ans.textContent = '—';
+    else align(it.t, it.a).ops.forEach(o => {
+      const s = document.createElement(o.op === 'skip' ? 's' : 'span');
+      s.className = 'rn ' + o.op;
+      s.textContent = noteName(o.op === 'skip' ? o.t : o.a);
+      ans.appendChild(s);
+    });
+    td(Math.round(it.s * 100) + '%');
+    body.appendChild(tr);
+  });
+}
+
+/* --- CSV (Excel için ; ayraçlı, Türkçe karakterler için BOM'lu) --- */
+function csvOf(recs) {
+  const maxQ = Math.max(0, ...recs.map(r => r.items.length));
+  const esc = v => { v = String(v ?? ''); return /[;"\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+  const head = ['Ad Soyad', 'Numara', 'Tarih', 'Sınav kodu', 'Cevap', 'Puan (100)',
+    ...Array.from({ length: maxQ }, (_, i) => `S${i + 1} (%)`)];
+  const rows = recs.map(r => [
+    r.name, r.no, new Date(r.date).toLocaleString('tr-TR'), r.code,
+    r.cfg.answer === 'voice' ? 'ses' : 'piyano', r.score,
+    ...r.items.map(it => Math.round(it.s * 100))
+  ]);
+  return '﻿' + [head, ...rows].map(r => r.map(esc).join(';')).join('\r\n');
+}
+function download(name, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const fileSafe = s => s.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '');
+
+/* --- Kayıtlı sonuçlar listesi --- */
+function renderSaved() {
+  const all = store.get('exams', []);
+  const box = $('exSavedList');
+  box.innerHTML = '';
+  $('exCsvAll').disabled = $('exClear').disabled = !all.length;
+  if (!all.length) { box.innerHTML = '<p class="hint-left">Henüz sonuç yok.</p>'; return; }
+  const table = document.createElement('table');
+  table.className = 'r-table';
+  table.innerHTML = '<thead><tr><th>Ad Soyad</th><th>Numara</th><th>Tarih</th><th>Kod</th><th>Puan</th><th></th></tr></thead>';
+  const tb = document.createElement('tbody');
+  all.slice().reverse().forEach(r => {
+    const tr = document.createElement('tr');
+    [r.name, r.no, new Date(r.date).toLocaleString('tr-TR'), r.code, r.score].forEach(v => {
+      const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+    });
+    const td = document.createElement('td');
+    const b = document.createElement('button');
+    b.textContent = 'Göster'; b.className = 'small';
+    b.addEventListener('click', () => showResult(r));
+    td.appendChild(b); tr.appendChild(td);
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  box.appendChild(table);
+}
+
+function backToSetup() {
+  $('exResult').hidden = true; $('exRun').hidden = true; $('exSetup').hidden = false;
+  $('exName').value = ''; $('exNo').value = '';
+  renderSaved();
+}
+
+/* --- Düğmeler --- */
+$('exStart').addEventListener('click', startExam);
+$('exPlay').addEventListener('click', examPlay);
+$('exRedo').addEventListener('click', examRedo);
+$('exNext').addEventListener('click', examNext);
+$('exAgain').addEventListener('click', backToSetup);
+$('exPrint').addEventListener('click', () => window.print());
+$('exCsv').addEventListener('click', () => {
+  if (shownRec) download(`sinav-${fileSafe(shownRec.name)}-${shownRec.code}.csv`, csvOf([shownRec]));
+});
+$('exCsvAll').addEventListener('click', () => download('sinav-sonuclari.csv', csvOf(store.get('exams', []))));
+$('exClear').addEventListener('click', () => {
+  if (confirm('Bu bilgisayardaki bütün sınav sonuçları silinsin mi? Bu geri alınamaz.')) {
+    store.set('exams', []); renderSaved();
+  }
+});
+$('exLinkBtn').addEventListener('click', async () => {
+  const c = readCfg();
+  const base = location.protocol.startsWith('http') ? location.origin + location.pathname : CANON_URL;
+  const url = base + '?' + cfgToQuery(c);
+  $('exLink').value = url;
+  try { await navigator.clipboard.writeText(url); setMsg($('exSetupMsg'), '🔗 Bağlantı kopyalandı. Öğrencilerle paylaşabilirsin.', 'good'); }
+  catch (_) { $('exLink').select(); setMsg($('exSetupMsg'), 'Bağlantıyı seçip kopyala (Ctrl+C).', 'info'); }
+});
+
+/* --- Başlangıç: bağlantıyla gelindiyse ayarları kilitle --- */
+(function initExam() {
+  const q = cfgFromQuery();
+  if (q) {
+    writeCfg({ ...q, code: q.code || randomCode() });
+    readCfg(); // değerleri doğrula/düzelt
+    $('exCfg').disabled = true;
+    $('exLockedNote').hidden = false;
+    $('exTeacher').hidden = true;
+    $('exSaved').hidden = true;
+    E.locked = true;
+    setTab('exam');
+  } else {
+    $('exCode').value = randomCode();
+  }
+  renderSaved();
+})();
+
+/* =========================================================
    Klavye kısayolları
    ========================================================= */
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'SELECT') return;
+  // Yazı alanlarında (öğrenci adı vb.) yazarken piyano çalmasın
+  if (e.target.tagName === 'TEXTAREA' ||
+      (e.target.tagName === 'INPUT' && !['range', 'checkbox'].includes(e.target.type))) return;
   if (e.code === 'Space') e.preventDefault();
   if (e.repeat) return;
 
-  if (activeTab === 'melody') {
+  if (activeTab === 'melody' || activeTab === 'exam') {
     if (KEYMAP[e.code] !== undefined) pressNote(KEYMAP[e.code]);
   } else {
     if (e.code === 'Space') tap();

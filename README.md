@@ -44,7 +44,28 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 - Sonuçta beklenen vuruşlar (yeşil = yakaladın, kırmızı = kaçtı), senin vuruşların ve fazla vuruşlar gösterilir. Program ayrıca erken mi geç mi vurduğunu söyler.
 - **Gecikme düzeltmesi**: Bluetooth kulaklık gibi gecikmeli bir ses çıkışında, her vuruşun "geç" sayıldığını görürsen bu değeri artır (genelde 100–200 ms).
 
-İstatistikler tarayıcıda (localStorage) saklanır.
+### 📝 Sınav (ezgi tekrarı)
+
+**Öğretmen:**
+1. **Sınav** sekmesinde ayarları seç: soru sayısı, nota sayısı (en az–en çok; sorular ilerledikçe artar), dizi, ritim, tempo, dinleme hakkı (1–3), cevap yolu (sesle / piyanoyla), her ezgiden önce Do sesi, giriş vuruşu.
+2. **Sınav kodu**: Aynı kod ve aynı ayarlarla giren her öğrenci **aynı soruları** alır. Kod otomatik üretilir, istersen değiştirebilirsin.
+3. **Öğrenci bağlantısını oluştur ve kopyala**: Bağlantıyı öğrencilerle paylaş. Bağlantıyı açan öğrenci ayarları değiştiremez, yalnızca adını yazıp başlar.
+
+**Öğrenci:**
+- Adını (ve numarasını) yazıp **Sınavı başlat**'a basar. Sesle cevapta tarayıcı mikrofon izni ister.
+- Her soruda ezgiyi en fazla belirlenen sayıda dinler, sonra söyler (ya da piyanoda çalar).
+- Sınav sırasında doğru/yanlış gösterilmez; yalnızca kaç nota cevapladığı görünür.
+- **Cevabı sil, yeniden cevapla** ile cevabını yenileyebilir (ezgiyi yeniden dinlemek hakkından düşer).
+- Sınav sırasında diğer sekmeler kapalıdır; sayfa kapatılmak istenirse uyarı çıkar.
+
+**Puanlama:** Her soruda söylenen notalar ezgiyle sırayla karşılaştırılır. Atlanan, fazladan ya da yanlış her nota bir nota puanı düşürür (düzeltme uzaklığı). Örneğin 4 notalık ezgide tek bir notayı atlamak %75 alır; sonraki notalar kaymış sayılmaz. Toplam puan, soru puanlarının ortalamasıdır (100 üzerinden).
+
+**Sonuçlar:**
+- Sonuç ekranında her sorunun ezgisi ve öğrencinin cevabı renkli gösterilir; **Yazdır / PDF** ile çıktı alınabilir.
+- **Sonucu indir (Excel / CSV)**: Öğrenci kendi cihazında yaptıysa bu dosyayı öğretmene gönderebilir.
+- Aynı bilgisayarda yapılan bütün sınavlar **Bu bilgisayardaki sonuçlar** listesinde birikir; **Tümünü indir** ile tek bir Excel dosyası alınır.
+
+İstatistikler ve sınav sonuçları tarayıcıda (localStorage) saklanır. Tarayıcı verileri silinirse sonuçlar da silinir; sınavdan sonra CSV'yi indirmeyi unutma.
 
 ## Dosyalar
 
@@ -52,7 +73,7 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 |---|---|
 | `index.html` | Sayfa yapısı |
 | `style.css` | Görünüm |
-| `app.js` | Ses üretimi, ezgi/ritim oluşturma, değerlendirme |
+| `app.js` | Ses üretimi, ezgi/ritim oluşturma, değerlendirme, mikrofonla perde algılama, sınav |
 
 ## Geliştirme fikirleri
 

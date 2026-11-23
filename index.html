@@ -12,6 +12,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="melody">Ezgi Tekrarı</button>
       <button class="tab" data-tab="rhythm">Ritim Tekrarı</button>
+      <button class="tab" data-tab="exam">📝 Sınav</button>
     </nav>
   </header>
 
@@ -72,8 +73,11 @@
       </div>
       <p id="mMsg" class="msg">“Yeni ezgi”ye bas, dinle, sonra piyanoda aynısını çal.</p>
 
-      <div id="piano" class="piano"></div>
-      <p class="hint">Bilgisayar klavyesi: <kbd>A</kbd> <kbd>W</kbd> <kbd>S</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>T</kbd> <kbd>G</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>U</kbd> <kbd>J</kbd> <kbd>K</kbd> (Do → Do')</p>
+      <!-- Piyano: sınavda klavyeyle cevap seçilirse Sınav sekmesine taşınır -->
+      <div id="pianoBox">
+        <div id="piano" class="piano"></div>
+        <p class="hint">Bilgisayar klavyesi: <kbd>A</kbd> <kbd>W</kbd> <kbd>S</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>T</kbd> <kbd>G</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>U</kbd> <kbd>J</kbd> <kbd>K</kbd> (Do → Do')</p>
+      </div>
 
       <div class="stats">
         Doğru: <b id="mScore">0</b> · Seri: <b id="mStreak">0</b> · En iyi seri: <b id="mBest">0</b>
@@ -132,6 +136,132 @@
 
       <div class="stats">
         Deneme: <b id="rTries">0</b> · Kusursuz: <b id="rPerfect">0</b> · Seri: <b id="rStreak">0</b> · En iyi seri: <b id="rBest">0</b>
+      </div>
+    </section>
+
+    <!-- ================= SINAV ================= -->
+    <section id="exam" class="panel">
+
+      <!-- 1) Hazırlık: öğretmen ayarları + öğrenci girişi -->
+      <div id="exSetup">
+        <h2>Sınav ayarları <small id="exLockedNote" hidden>· öğretmen tarafından belirlendi</small></h2>
+        <fieldset id="exCfg" class="settings exam-cfg">
+          <label>Soru sayısı
+            <input type="number" id="exQ" min="1" max="40" value="10">
+          </label>
+          <label>Nota sayısı
+            <input type="number" id="exNmin" min="2" max="10" value="3"> –
+            <input type="number" id="exNmax" min="2" max="10" value="6">
+          </label>
+          <label>Dizi
+            <select id="exScale">
+              <option value="pent">Pentatonik</option>
+              <option value="major" selected>Do majör</option>
+              <option value="chrom">Kromatik</option>
+            </select>
+          </label>
+          <label>Ritim
+            <select id="exRhythm">
+              <option value="even">Düz</option>
+              <option value="simple" selected>Basit</option>
+              <option value="dotted">Noktalı</option>
+              <option value="mixed">Karışık</option>
+            </select>
+          </label>
+          <label>Tempo
+            <input type="number" id="exBpm" min="50" max="160" value="80"> BPM
+          </label>
+          <label>Dinleme hakkı
+            <select id="exListens">
+              <option value="1">1 kez</option>
+              <option value="2" selected>2 kez</option>
+              <option value="3">3 kez</option>
+            </select>
+          </label>
+          <label>Cevap
+            <select id="exAnswer">
+              <option value="voice" selected>🎤 Sesle (söyleyerek)</option>
+              <option value="keys">Piyano / klavye ile</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="exDo" checked> Her ezgiden önce Do sesi</label>
+          <label class="check"><input type="checkbox" id="exCount" checked> Giriş vuruşu (1 ölçü)</label>
+          <label>Sınav kodu
+            <input type="text" id="exCode" maxlength="12" size="8" spellcheck="false">
+          </label>
+        </fieldset>
+        <p class="hint-left">Aynı kod ve aynı ayarlarla giren her öğrenci <b>aynı soruları</b> alır.</p>
+
+        <div id="exTeacher" class="teacher-box">
+          <button id="exLinkBtn">🔗 Öğrenci bağlantısını oluştur ve kopyala</button>
+          <input type="text" id="exLink" readonly placeholder="Bağlantı burada görünür">
+          <p class="hint-left">Bu bağlantıyı açan öğrenci ayarları değiştiremez; yalnızca adını yazıp sınava başlar.</p>
+        </div>
+
+        <h2>Öğrenci</h2>
+        <div class="settings student">
+          <label>Ad Soyad <input type="text" id="exName" size="22" autocomplete="off"></label>
+          <label>Numara <input type="text" id="exNo" size="10" autocomplete="off"></label>
+        </div>
+        <div class="controls">
+          <button id="exStart" class="primary">▶ Sınavı başlat</button>
+        </div>
+        <p id="exSetupMsg" class="msg"></p>
+
+        <div id="exSaved" class="saved">
+          <h2>Bu bilgisayardaki sonuçlar</h2>
+          <div id="exSavedList"></div>
+          <div class="controls">
+            <button id="exCsvAll">⬇ Tümünü indir (Excel / CSV)</button>
+            <button id="exClear">🗑 Sonuçları sil</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2) Sınav -->
+      <div id="exRun" hidden>
+        <div class="exam-head">
+          <span id="exWho"></span>
+          <span>Soru <b id="exNum">1</b> / <b id="exTotal">10</b></span>
+        </div>
+        <div class="progress"><i id="exProg"></i></div>
+
+        <div class="controls">
+          <button id="exPlay" class="primary">▶ Dinle</button>
+          <button id="exRedo" disabled>↺ Cevabı sil, yeniden cevapla</button>
+          <button id="exNext" disabled>Sonraki soru →</button>
+        </div>
+
+        <div id="exSlots" class="slots"></div>
+        <div id="exMic" class="mic-live">
+          <span>🎤 Duyulan:</span> <b id="exMicNote">–</b>
+          <span class="meter"><i id="exMicLevel"></i></span>
+        </div>
+        <p id="exMsg" class="msg"></p>
+        <div id="exPianoHost"></div>
+      </div>
+
+      <!-- 3) Sonuç -->
+      <div id="exResult" hidden>
+        <div class="result-head">
+          <div>
+            <div id="exRName" class="r-name"></div>
+            <div id="exRMeta" class="r-meta"></div>
+          </div>
+          <div class="r-score"><span id="exRScore">0</span><small>/100</small></div>
+        </div>
+        <table class="r-table">
+          <thead><tr><th>#</th><th>Ezgi</th><th>Cevap</th><th>Puan</th></tr></thead>
+          <tbody id="exRBody"></tbody>
+        </table>
+        <p class="hint-left">Puanlama: her soruda notalar sırayla karşılaştırılır; atlanan, fazladan ya da yanlış
+          her nota için bir nota puanı düşülür. Yeşil = doğru nota, kırmızı = yanlış/fazla nota,
+          <s>üstü çizili</s> = atlanan nota.</p>
+        <div class="controls no-print">
+          <button id="exCsv">⬇ Sonucu indir (Excel / CSV)</button>
+          <button id="exPrint">🖨 Yazdır / PDF</button>
+          <button id="exAgain" class="primary">Yeni öğrenci</button>
+        </div>
       </div>
     </section>
   </main>
