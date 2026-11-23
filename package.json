@@ -1,0 +1,48 @@
+{
+  "name": "ezgi-ritim",
+  "productName": "Ezgi ve Ritim",
+  "version": "1.0.0",
+  "description": "Kulak eğitimi: ezgi ve ritim tekrarı, sesle cevap ve sınav",
+  "author": "gryflute-ui",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^45.2.2",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.ezgiritim.masaustu",
+    "productName": "Ezgi ve Ritim",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "app.js",
+      "style.css",
+      "simge.png"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Ezgi ve Ritim",
+      "installerLanguages": ["tr_TR"],
+      "language": "1055",
+      "artifactName": "Ezgi-Ritim-Kurulum-${version}.${ext}"
+    }
+  }
+}

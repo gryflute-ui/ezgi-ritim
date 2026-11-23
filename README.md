@@ -1,8 +1,10 @@
 # Ezgi & Ritim Tekrarı
 
-Kulak eğitimi için tarayıcıda çalışan küçük bir program. Kurulum gerektirmez; HTML, CSS ve JavaScript (Web Audio API) ile yazıldı.
+Kulak eğitimi için bir program. Tarayıcıda kurulumsuz çalışır, Windows'a masaüstü uygulaması olarak da kurulabilir. HTML, CSS ve JavaScript (Web Audio API) ile yazıldı.
 
 **🌐 Tarayıcıda aç:** https://gryflute-ui.github.io/ezgi-ritim/
+
+**🖥️ Windows uygulaması:** `Ezgi-Ritim-Kurulum-1.0.0.exe` (aşağıda **Masaüstü uygulaması** bölümüne bak)
 
 ## VS Code'da çalıştırma
 
@@ -75,12 +77,33 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 
 İstatistikler ve sınav sonuçları tarayıcıda (localStorage) saklanır. Tarayıcı verileri silinirse sonuçlar da silinir; sınavdan sonra CSV'yi indirmeyi unutma.
 
+## Masaüstü uygulaması (Windows)
+
+Program, metronomdaki gibi Electron ile Windows uygulaması olarak paketlenir.
+
+**Kurulum:** `Ezgi-Ritim-Kurulum-1.0.0.exe` dosyasını çalıştır. Dosya dijital olarak imzalı olmadığı için Windows "Windows kişisel bilgisayarınızı korudu" uyarısı gösterebilir: **Ek bilgi → Yine de çalıştır**. Kurulumdan sonra uygulama masaüstünde ve Başlat menüsünde **Ezgi ve Ritim** adıyla görünür.
+
+- **Mikrofon:** Uygulama yalnızca mikrofona erişir, kameraya erişmez. Windows'ta *Ayarlar → Gizlilik ve güvenlik → Mikrofon* altında "Masaüstü uygulamalarının mikrofonunuza erişmesine izin verin" açık olmalıdır.
+- **Sınav bağlantısı:** Masaüstü uygulamasında bağlantı tıklanarak açılamaz. Öğrenci, öğretmenin verdiği bağlantıyı Sınav sekmesindeki **"Sınav bağlantısını yapıştır"** kutusuna yapıştırıp **Ayarları yükle**'ye basar.
+- Sınav sürerken pencere kapatılmak istenirse uygulama onay ister.
+- Sonuçlar uygulamanın kendi verilerinde saklanır; tarayıcıdaki sonuçlardan ayrıdır.
+
+**Yeniden derleme:**
+```
+npm install
+npm start        # uygulamayı geliştirme modunda açar
+npm run dist     # dist/ klasörüne kurulum dosyasını üretir
+```
+Simge, `build/simge-kaynak.html` dosyasındaki SVG çiziminden üretildi (`build/icon.png`, `simge.png`).
+
 ## Dosyalar
 
 | Dosya | Görevi |
 |---|---|
 | `index.html` | Sayfa yapısı |
 | `style.css` | Görünüm |
+| `main.js` | Masaüstü (Electron) penceresi, mikrofon izni, sınavda kapanma onayı |
+| `package.json` | Masaüstü paketleme ayarları |
 | `app.js` | Ses üretimi, ezgi/ritim oluşturma, değerlendirme, mikrofonla perde algılama, sınav |
 
 ## Geliştirme fikirleri

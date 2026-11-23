@@ -301,6 +301,8 @@ fieldset.settings:disabled { opacity: .75; }
 }
 .teacher-box input { flex: 1; min-width: 240px; color: var(--muted); }
 .teacher-box .hint-left { flex-basis: 100%; margin: 0; }
+#exPasteBox { margin-top: 18px; }
+#exPasteBox span { color: var(--muted); font-size: .9rem; }
 .saved { margin-top: 26px; padding-top: 6px; border-top: 1px solid var(--line); }
 button.small { padding: 3px 10px; font-size: .85rem; }
 

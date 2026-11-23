@@ -1097,8 +1097,8 @@ function cfgToQuery(c) {
   return p.toString();
 }
 
-function cfgFromQuery() {
-  const p = new URLSearchParams(location.search);
+function cfgFromQuery(search = location.search) {
+  const p = new URLSearchParams(search);
   if (!p.has('sinav')) return null;
   const g = (k, d) => p.has(QKEYS[k]) ? p.get(QKEYS[k]) : d;
   return {
@@ -1456,21 +1456,38 @@ $('exLinkBtn').addEventListener('click', async () => {
   catch (_) { $('exLink').select(); setMsg($('exSetupMsg'), 'Bağlantıyı seçip kopyala (Ctrl+C).', 'info'); }
 });
 
+/* --- Bağlantıdaki ayarları uygula ve kilitle --- */
+function lockToCfg(q) {
+  writeCfg({ ...q, code: q.code || randomCode() });
+  readCfg(); // değerleri doğrula/düzelt
+  $('exCfg').disabled = true;
+  $('exLockedNote').hidden = false;
+  $('exTeacher').hidden = true;
+  $('exSaved').hidden = true;
+  $('exPasteBox').hidden = true;
+  E.locked = true;
+  setTab('exam');
+}
+
+// Masaüstü uygulamasında bağlantı tıklanarak açılamaz; öğrenci yapıştırır
+$('exPasteBtn').addEventListener('click', () => {
+  const text = $('exPaste').value.trim();
+  const i = text.indexOf('?');
+  const q = i >= 0 ? cfgFromQuery(text.slice(i)) : null;
+  if (!q) {
+    setMsg($('exSetupMsg'), 'Bu bir sınav bağlantısı değil. Öğretmeninin verdiği bağlantının tamamını yapıştır.', 'bad');
+    return;
+  }
+  lockToCfg(q);
+  setMsg($('exSetupMsg'), `✓ Sınav ayarları yüklendi (kod ${readCfg().code}). Adını yazıp sınavı başlat.`, 'good');
+  $('exName').focus();
+});
+
 /* --- Başlangıç: bağlantıyla gelindiyse ayarları kilitle --- */
 (function initExam() {
   const q = cfgFromQuery();
-  if (q) {
-    writeCfg({ ...q, code: q.code || randomCode() });
-    readCfg(); // değerleri doğrula/düzelt
-    $('exCfg').disabled = true;
-    $('exLockedNote').hidden = false;
-    $('exTeacher').hidden = true;
-    $('exSaved').hidden = true;
-    E.locked = true;
-    setTab('exam');
-  } else {
-    $('exCode').value = randomCode();
-  }
+  if (q) lockToCfg(q);
+  else $('exCode').value = randomCode();
   renderSaved();
 })();
 
