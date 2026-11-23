@@ -4,7 +4,7 @@ Kulak eğitimi için bir program. Tarayıcıda kurulumsuz çalışır, Windows'a
 
 **🌐 Tarayıcıda aç:** https://gryflute-ui.github.io/ezgi-ritim/
 
-**🖥️ Windows uygulaması:** `Ezgi-Ritim-Kurulum-1.0.0.exe` (aşağıda **Masaüstü uygulaması** bölümüne bak)
+**⬇️ Windows için indir:** [Ezgi-Ritim-Kurulum-1.0.0.exe](https://github.com/gryflute-ui/ezgi-ritim/releases/download/v1.0.0/Ezgi-Ritim-Kurulum-1.0.0.exe) (aşağıda **Masaüstü uygulaması** bölümüne bak)
 
 ## VS Code'da çalıştırma
 
