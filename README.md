@@ -22,7 +22,8 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
   - *Basit*: dörtlük, sekizlik, ikilik
   - *Noktalı*: + noktalı dörtlük, noktalı sekizlik, senkop (sekizlik–dörtlük–sekizlik)
   - *Karışık*: + on altılık kalıpları ve üçleme
-  Her notanın altındaki çubuk süresini gösterir (tam genişlik = 2 vuruş). Değerlendirmede yalnızca notaların perdesine bakılır.
+  Cevaplanan notaların altındaki çubuk süresini gösterir (tam genişlik = 2 vuruş). Çubuklar cevaptan önce gizlidir, yoksa ritmi ele verirdi.
+- **Ritmi de değerlendir** (varsayılan açık): Perdeler doğruysa ritme de bakılır; ritim hatalıysa hangi notanın kısa/uzun olduğu söylenir (ör. "2. nota kısa (dörtlük yerine sekizlik gibi)") ve çubuğu turuncu olur. Ayrıntılar aşağıda, **Ritim nasıl ölçülür?** bölümünde.
 - **Giriş vuruşu**: Ezgiden önce 1 ölçülük (4 vuruş) metronom çalar; ritmi kavramayı kolaylaştırır.
 - **Cevap → 🎤 Sesle**: Ezgi bitince mikrofon açılır, öğrenci duyduğunu söyler.
   - "la" ya da "na" hecesiyle söylemek en iyi sonucu verir.
@@ -47,7 +48,7 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 ### 📝 Sınav (ezgi tekrarı)
 
 **Öğretmen:**
-1. **Sınav** sekmesinde ayarları seç: soru sayısı, nota sayısı (en az–en çok; sorular ilerledikçe artar), dizi, ritim, tempo, dinleme hakkı (1–3), cevap yolu (sesle / piyanoyla), her ezgiden önce Do sesi, giriş vuruşu.
+1. **Sınav** sekmesinde ayarları seç: soru sayısı, nota sayısı (en az–en çok; sorular ilerledikçe artar), dizi, ritim, tempo, dinleme hakkı (1–3), cevap yolu (sesle / piyanoyla), ritim puanı (yok / puanın %30’u / %50’si), her ezgiden önce Do sesi, giriş vuruşu.
 2. **Sınav kodu**: Aynı kod ve aynı ayarlarla giren her öğrenci **aynı soruları** alır. Kod otomatik üretilir, istersen değiştirebilirsin.
 3. **Öğrenci bağlantısını oluştur ve kopyala**: Bağlantıyı öğrencilerle paylaş. Bağlantıyı açan öğrenci ayarları değiştiremez, yalnızca adını yazıp başlar.
 
@@ -58,7 +59,14 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 - **Cevabı sil, yeniden cevapla** ile cevabını yenileyebilir (ezgiyi yeniden dinlemek hakkından düşer).
 - Sınav sırasında diğer sekmeler kapalıdır; sayfa kapatılmak istenirse uyarı çıkar.
 
-**Puanlama:** Her soruda söylenen notalar ezgiyle sırayla karşılaştırılır. Atlanan, fazladan ya da yanlış her nota bir nota puanı düşürür (düzeltme uzaklığı). Örneğin 4 notalık ezgide tek bir notayı atlamak %75 alır; sonraki notalar kaymış sayılmaz. Toplam puan, soru puanlarının ortalamasıdır (100 üzerinden).
+**Puanlama:** Her soruda söylenen notalar ezgiyle sırayla karşılaştırılır. Atlanan, fazladan ya da yanlış her nota bir nota puanı düşürür (düzeltme uzaklığı). Örneğin 4 notalık ezgide tek bir notayı atlamak %75 alır; sonraki notalar kaymış sayılmaz. Ritim puanı açıksa her sorunun puanı perde ve ritim puanlarının ağırlıklı ortalamasıdır (ör. %30 ritim: 0,7 × perde + 0,3 × ritim). Toplam puan, soru puanlarının ortalamasıdır (100 üzerinden). Sonuç ekranında ve Excel dosyasında perde ve ritim puanları ayrıca gösterilir; ritmi hatalı notaların altı dalgalı çizgiyle işaretlenir.
+
+**Ritim nasıl ölçülür?**
+- Her notanın başladığı an kaydedilir (piyanoda tuşa basış, seste notanın başlangıcı). Ardışık iki notanın başlangıçları arasındaki süre, ezgideki nota süresiyle karşılaştırılır. Yaklaşık %22 kısa ile %27 uzun arasındaki sapma doğru sayılır.
+- Öğrenci biraz hızlı ya da yavaş söyleyebilir: ritim, öğrencinin kendi temposuna göre ölçülür. Ancak tempo duyulandan çok farklıysa (yaklaşık üçte birden fazla yavaş ya da yarıdan fazla hızlı) bu ritim hatası olarak yansır.
+- Son notanın süresi ölçülmez (ardından nota gelmez); n notalık ezgide n−1 süre değerlendirilir.
+- Sınırlama: Bütün süreler aynı oranda değişirse (ör. yalnızca üçlemelerden oluşan bir ezgi sekizlik söylenirse) bu, tempo değişikliğinden ayırt edilemez. Üçleme ya da hızlı notalar başka sürelerle bir aradaysa hata yakalanır.
+- Eski (ritim puanı eklenmeden önce oluşturulmuş) öğrenci bağlantılarında ritim puanlanmaz.
 
 **Sonuçlar:**
 - Sonuç ekranında her sorunun ezgisi ve öğrencinin cevabı renkli gösterilir; **Yazdır / PDF** ile çıktı alınabilir.
@@ -79,5 +87,5 @@ Eklenti kurmak istemezsen `index.html` dosyasına çift tıklayıp tarayıcıda 
 
 - `app.js` içindeki `SCALES` nesnesine yeni diziler ekle (ör. minör, makamlar).
 - Piyanoyu iki oktava genişlet (`WHITES` ve `BLACKS`).
-- Sesle cevapta ritmi de değerlendir (her notanın başladığı an `closeCand` içinde zaten ölçülüyor).
+- Ritim sınavı: ritim tekrarı sorularını da sınava ekle.
 - Ritim için 3/4 ya da 6/8 ölçü seçeneği ekle.

@@ -207,9 +207,97 @@ const mMsg = $('mMsg');
 
 const M = {
   target: [], durs: [], input: [], phase: 'idle', revealed: false,
+  times: [],      // cevap notalarının başlama anları (ritim için)
+  beat: 0.75,     // çalınan ezginin vuruş süresi (sn)
+  rbad: [],       // ritmi hatalı notaların sırası
   score: store.get('mScore', 0), streak: 0, best: store.get('mBest', 0),
   timers: [], bus: null
 };
+
+/* =========================================================
+   RİTİM DEĞERLENDİRMESİ (söylenen/çalınan ezgi)
+   Ardışık iki notanın başlama anları arasındaki süre, ezgideki nota
+   süresiyle karşılaştırılır. Öğrencinin kendi temposu bulunur ve ona göre
+   ölçülür (biraz hızlı/yavaş söylemek hata değildir). Son notanın süresi
+   ölçülemez (ardından nota gelmez), bu yüzden n notalık ezgide n−1 aralık var.
+   ========================================================= */
+const RHYTHM_TOL = 0.35;                  // log2 cinsinden tolerans (%22 kısa … %27 uzun)
+const TEMPO_MIN = 0.67, TEMPO_MAX = 1.5;  // duyulan tempoya göre kabul edilen vuruş süresi aralığı
+const DUR_SET = [2, 1.5, 1, 0.75, 0.5, T, 0.25];
+const nearestDur = b => DUR_SET.reduce((best, d) => Math.abs(Math.log2(b / d)) < Math.abs(Math.log2(b / best)) ? d : best);
+
+function rhythmEval(target, durs, answer, times, beatSec) {
+  const total = target.length - 1;
+  const res = { total, ok: 0, score: total > 0 ? 0 : 1, items: [], tempo: 1 };
+  if (total < 1 || !times || times.length < 2) return res;
+
+  // Perde hizalamasından eşleşen nota çiftleri; ardışık eşleşmeler bir aralık verir
+  const pairs = align(target, answer).ops.filter(o => o.ti !== undefined && o.aj !== undefined);
+  let iv = [];
+  for (let k = 1; k < pairs.length; k++) {
+    const p = pairs[k - 1], q = pairs[k];
+    if (q.ti === p.ti + 1 && q.aj === p.aj + 1) {
+      iv.push({ i: p.ti, aj: p.aj, beats: durs[p.ti] || 1, got: times[q.aj] - times[p.aj] });
+    }
+  }
+  iv = iv.filter(x => x.got > 0);
+  if (!iv.length) return res;
+
+  // Öğrencinin vuruş süresi: en çok aralığı doğru yapan aday. Duyulan tempodan uzaklaşmanın
+  // bir bedeli var: öğrencinin tempoyu değiştirdiği, ancak bu varsayım belirgin biçimde daha çok
+  // aralığı açıklıyorsa kabul edilir. Yoksa hata yanlış notalara yüklenebilirdi (ör. üçlemeyi
+  // sekizlik söyleyen öğrenci "yavaş söyledi" sanılıp dörtlükleri hatalı görünürdü).
+  const TEMPO_PENALTY = 2;
+  const clampS = s => Math.min(beatSec * TEMPO_MAX, Math.max(beatSec * TEMPO_MIN, s));
+  const okCount = s => iv.filter(x => Math.abs(Math.log2(x.got / (x.beats * s))) <= RHYTHM_TOL).length;
+  const fit = s => okCount(s) - TEMPO_PENALTY * Math.abs(Math.log2(s / beatSec));
+  let scale = beatSec, bestF = fit(beatSec);
+  iv.forEach(x => {
+    const s = clampS(x.got / x.beats), f = fit(s);
+    if (f > bestF) { scale = s; bestF = f; }
+  });
+  const bestN = okCount(scale);
+  // İnce ayar: doğru aralıkların ortanca temposu (doğru sayısı azalmıyorsa)
+  const goodS = iv.filter(x => Math.abs(Math.log2(x.got / (x.beats * scale))) <= RHYTHM_TOL)
+                  .map(x => x.got / x.beats).sort((a, b) => a - b);
+  if (goodS.length) {
+    const refined = clampS(goodS[Math.floor(goodS.length / 2)]);
+    if (okCount(refined) >= bestN) scale = refined;
+  }
+
+  iv.forEach(x => {
+    x.sung = x.got / scale;                 // vuruş cinsinden söylenen süre
+    x.err = Math.log2(x.sung / x.beats);    // <0 kısa, >0 uzun
+    x.ok = Math.abs(x.err) <= RHYTHM_TOL;
+  });
+  res.items = iv;
+  res.ok = iv.filter(x => x.ok).length;
+  res.score = res.ok / total;
+  res.tempo = beatSec / scale;              // >1: daha hızlı söyledi
+  return res;
+}
+
+// Ritim hatalarını okunur metne çevirir
+function rhythmText(r) {
+  const bad = r.items.filter(x => !x.ok);
+  const parts = bad.slice(0, 3).map(x => {
+    const near = nearestDur(x.sung);
+    const how = x.err < 0 ? 'kısa' : 'uzun';
+    return near !== x.beats
+      ? `${x.i + 1}. nota ${how} (${durName(x.beats)} yerine ${durName(near)} gibi)`
+      : `${x.i + 1}. nota biraz ${how}`;
+  });
+  if (bad.length > 3) parts.push(`+${bad.length - 3} hata daha`);
+  const missing = r.total - r.items.length;
+  if (missing > 0) parts.push(`${missing} aralık değerlendirilemedi`);
+  return parts.join('; ');
+}
+function tempoText(r, verb = 'söyledin') {
+  if (!r.items.length) return '';
+  if (r.tempo > 1.15) return ` Duyduğundan biraz hızlı ${verb} (ritim senin temponla ölçüldü).`;
+  if (r.tempo < 0.87) return ` Duyduğundan biraz yavaş ${verb} (ritim senin temponla ölçüldü).`;
+  return '';
+}
 
 /* --- Piyanoyu oluştur --- */
 const piano = $('piano');
@@ -260,13 +348,17 @@ function renderSlots() {
     const name = document.createElement('span');
     name.textContent = label;
     d.appendChild(name);
-    // Notanın süresini gösteren çubuk (2 vuruş = tam genişlik)
-    const dur = M.durs[i] || 1;
-    const bar = document.createElement('i');
-    bar.className = 'dur';
-    bar.style.width = Math.min(100, dur * 50) + '%';
-    d.title = durName(dur);
-    d.appendChild(bar);
+    // Notanın süresini gösteren çubuk (2 vuruş = tam genişlik).
+    // Cevaplanmadan gösterilmez, yoksa ritmi önceden ele verir.
+    if (inp !== undefined || M.revealed) {
+      const dur = M.durs[i] || 1;
+      const bar = document.createElement('i');
+      const rb = M.rbad.includes(i);
+      bar.className = 'dur' + (rb ? ' rbad' : '');
+      bar.style.width = Math.min(100, dur * 50) + '%';
+      d.title = durName(dur) + (rb ? ' — ritim hatalı' : '');
+      d.appendChild(bar);
+    }
     box.appendChild(d);
   });
 }
@@ -332,7 +424,8 @@ function playMelody() {
   stopMelody();
   M.bus = newBus();
   const countIn = $('mCount').checked ? 4 : 0;
-  M.phase = 'playing'; M.input = []; M.revealed = false;
+  M.phase = 'playing'; M.input = []; M.times = []; M.rbad = []; M.revealed = false;
+  M.beat = 60 / +mBpm.value;
   renderSlots();
   setMsg(mMsg, countIn ? '🎧 Dinle… (4 vuruş giriş)' : '🎧 Dinle…');
 
@@ -366,13 +459,15 @@ function pressNote(m) {
   tone(m, audio().currentTime);
   flashKey(m);
   if (M.phase !== 'answering') return;
-  answerNote(m);
+  answerNote(m, audio().currentTime);
 }
 
-// Bir cevap notasını değerlendirir (klavyeden ya da sesten gelir)
-function answerNote(m) {
+// Bir cevap notasını değerlendirir (klavyeden ya da sesten gelir).
+// t: notanın başladığı an (ritim değerlendirmesi için)
+function answerNote(m, t) {
   const i = M.input.length;
   M.input.push(m);
+  M.times.push(t);
   const verb = voiceMode() ? 'söyledin' : 'çaldın';
 
   if (m !== M.target[i]) {
@@ -392,6 +487,23 @@ function answerNote(m) {
   if (M.input.length === M.target.length) {
     M.phase = 'idle';
     stopListening();
+
+    // Perdeler doğru; ritim de değerlendirilsin mi?
+    let rhythmNote = '';
+    if ($('mREval').checked) {
+      const r = rhythmEval(M.target, M.durs, M.input, M.times, M.beat);
+      if (r.ok < r.total) {
+        M.rbad = r.items.filter(x => !x.ok).map(x => x.i);
+        M.streak = 0;
+        renderSlots();
+        setMsg(mMsg, `◐ Perdeler doğru, ama ritimde ${r.total - r.ok} hata var: ${rhythmText(r)}.` +
+          tempoText(r, verb) + ' Turuncu çubuklar ritmi hatalı notaları gösterir. “Tekrar dinle / dene” ile yeniden dene.', 'bad');
+        updateMStats();
+        return;
+      }
+      rhythmNote = ' Perde ve ritim doğru!' + tempoText(r, verb);
+    }
+
     M.score++; M.streak++;
     M.best = Math.max(M.best, M.streak);
     let extra = '';
@@ -400,7 +512,7 @@ function answerNote(m) {
       mLen.dispatchEvent(new Event('input'));
       extra = ` Seviye atladın: artık ${mLen.value} nota! 🚀`;
     }
-    setMsg(mMsg, '✓ Harika, doğru!' + extra + ' Devam için “Yeni ezgi”.', 'good');
+    setMsg(mMsg, '✓ Harika, doğru!' + rhythmNote + extra + ' Devam için “Yeni ezgi”.', 'good');
     updateMStats();
   }
 }
@@ -415,7 +527,7 @@ const voiceMode = () => $('mAnswer').value === 'voice';
 const V = {
   stream: null, src: null, an: null, buf: null, timer: null,
   // Dinlemeyi kullanan bölüm (Ezgi sekmesi ya da Sınav):
-  //   ref(): sıradaki beklenen nota (oktav tahmini için), onNote(m), onTimeout()
+  //   ref(): sıradaki beklenen nota (oktav tahmini için), onNote(m, başlama anı), onTimeout()
   handler: null,
   ui: null,            // { live, note, level } canlı gösterge öğeleri
   octave: null,        // öğrencinin oktav kayması (erkek sesi 1 oktav pes söyleyebilir)
@@ -587,7 +699,7 @@ function closeCand() {
     return;
   }
   V.cur = { ref: sung, p };
-  commitSung(sung);
+  commitSung(sung, c.start);
 }
 
 // Doğrusal eğilim: kareler boyunca perdenin toplam değişimi (yarım ses)
@@ -608,14 +720,15 @@ function trimMean(arr) {
   return mid.reduce((a, b) => a + b, 0) / mid.length;
 }
 
-function commitSung(sung) {
+// onset: notanın başladığı an (ses saatine göre) — ritim değerlendirmesi için
+function commitSung(sung, onset) {
   if (!V.handler) return;
   // Oktav: ilk notada öğrencinin hangi oktavda söylediğine bakılır,
   // sonra bütün ezgi o oktava göre değerlendirilir (aralıklar korunur).
   if (V.octave === null) V.octave = Math.round((sung - V.handler.ref()) / 12);
   const m = Math.round(sung - 12 * V.octave);
   flashKey(m, 250);
-  V.handler.onNote(m);
+  V.handler.onNote(m, onset);
 }
 
 // Ezgi sekmesinde sesle cevabı başlatır
@@ -957,7 +1070,8 @@ function readCfg() {
     listens: clampInt($('exListens').value, 1, 3, 2),
     answer: $('exAnswer').value === 'keys' ? 'keys' : 'voice',
     refDo: $('exDo').checked,
-    countIn: $('exCount').checked
+    countIn: $('exCount').checked,
+    rw: [0, 30, 50].includes(+$('exRW').value) ? +$('exRW').value : 30  // ritmin puandaki payı (%)
   };
   writeCfg(c); // düzeltilmiş değerleri forma geri yaz
   return c;
@@ -970,11 +1084,12 @@ function writeCfg(c) {
   $('exBpm').value = c.bpm; $('exListens').value = c.listens;
   $('exAnswer').value = c.answer;
   $('exDo').checked = c.refDo; $('exCount').checked = c.countIn;
+  $('exRW').value = c.rw;
 }
 
 // Bağlantıdaki adlar (Türkçe, kısa)
 const QKEYS = { code: 'kod', q: 'soru', nmin: 'enaz', nmax: 'encok', scale: 'dizi', rhythm: 'ritim',
-                bpm: 'tempo', listens: 'hak', answer: 'cevap', refDo: 'do', countIn: 'giris' };
+                bpm: 'tempo', listens: 'hak', answer: 'cevap', refDo: 'do', countIn: 'giris', rw: 'ritimpuan' };
 
 function cfgToQuery(c) {
   const p = new URLSearchParams({ sinav: '1' });
@@ -990,7 +1105,8 @@ function cfgFromQuery() {
     code: g('code', ''), q: g('q', 10), nmin: g('nmin', 3), nmax: g('nmax', 6),
     scale: g('scale', 'major'), rhythm: g('rhythm', 'simple'), bpm: g('bpm', 80),
     listens: g('listens', 2), answer: g('answer', 'voice'),
-    refDo: g('refDo', '1') === '1', countIn: g('countIn', '1') === '1'
+    refDo: g('refDo', '1') === '1', countIn: g('countIn', '1') === '1',
+    rw: g('rw', '0')   // ritim puanı eklenmeden önce oluşturulan bağlantılarda ritim puanlanmaz
   };
 }
 
@@ -1019,16 +1135,29 @@ function align(t, a) {
   let i = n, j = m;
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && D[i][j] === D[i - 1][j - 1] + (t[i - 1] === a[j - 1] ? 0 : 1)) {
-      ops.push({ op: t[i - 1] === a[j - 1] ? 'ok' : 'bad', t: t[i - 1], a: a[j - 1] }); i--; j--;
+      ops.push({ op: t[i - 1] === a[j - 1] ? 'ok' : 'bad', t: t[i - 1], a: a[j - 1], ti: i - 1, aj: j - 1 }); i--; j--;
     } else if (j > 0 && D[i][j] === D[i][j - 1] + 1) {
-      ops.push({ op: 'extra', a: a[j - 1] }); j--;
+      ops.push({ op: 'extra', a: a[j - 1], aj: j - 1 }); j--;
     } else {
-      ops.push({ op: 'skip', t: t[i - 1] }); i--;
+      ops.push({ op: 'skip', t: t[i - 1], ti: i - 1 }); i--;
     }
   }
   return { dist: D[n][m], ops: ops.reverse() };
 }
+// Perde puanı (0–1)
 const itemScore = it => Math.max(0, it.target.length - align(it.target, it.answer).dist) / it.target.length;
+
+// Bir sorunun bütün puanları: perde, ritim ve ağırlıklı toplam (0–1)
+function scoreItem(it, cfg) {
+  const sp = itemScore(it);
+  const r = rhythmEval(it.target, it.durs, it.answer, it.times, 60 / cfg.bpm);
+  const w = (cfg.rw || 0) / 100;
+  return {
+    sp, sr: r.score, s: w ? (1 - w) * sp + w * r.score : sp,
+    rbad: r.items.filter(x => !x.ok).map(x => x.aj),   // ritmi hatalı cevap notaları
+    tempo: r.tempo
+  };
+}
 
 /* --- Piyanoyu sınav ekranına taşıma --- */
 const pianoBox = $('pianoBox');
@@ -1089,7 +1218,7 @@ async function startExam() {
 
 function showQuestion() {
   stopExamAudio();
-  E.listens = E.cfg.listens; E.answer = []; E.state = 'ready';
+  E.listens = E.cfg.listens; E.answer = []; E.times = []; E.state = 'ready';
   $('exNum').textContent = E.i + 1;
   $('exProg').style.width = (E.i / E.items.length * 100) + '%';
   $('exRedo').disabled = true;
@@ -1104,7 +1233,7 @@ function showQuestion() {
 function examPlay() {
   if (E.listens <= 0 || E.state === 'playing') return;
   stopExamAudio();
-  E.listens--; E.answer = []; E.state = 'playing';
+  E.listens--; E.answer = []; E.times = []; E.state = 'playing';
   setPlayBtn(); renderExSlots();
   $('exRedo').disabled = true; $('exNext').disabled = true;
   setMsg(exMsg, E.cfg.refDo ? '🎧 Önce Do sesi, sonra ezgi… Dinle.' : '🎧 Dinle…');
@@ -1132,9 +1261,10 @@ async function beginAnswer() {
   setMsg(exMsg, '🎤 Şimdi söyle! (aynı nota tekrar ediyorsa araya kısa bir boşluk bırak)', 'info');
 }
 
-function examNote(m) {
+function examNote(m, t) {
   if (E.state !== 'answering') return;
   E.answer.push(m);
+  E.times.push(t);
   renderExSlots();
   $('exRedo').disabled = false;
   if (E.answer.length >= exItem().target.length) finishAnswer('✓ Cevabın kaydedildi.');
@@ -1153,7 +1283,7 @@ function finishAnswer(text) {
 function examRedo() {
   if (E.state !== 'answering' && E.state !== 'answered') return;
   stopListening();
-  E.answer = [];
+  E.answer = []; E.times = [];
   renderExSlots();
   beginAnswer();
 }
@@ -1164,7 +1294,7 @@ function examKey(m) {
   if (E.cfg.answer === 'voice' && E.state === 'answering') return;
   tone(m, audio().currentTime);
   flashKey(m);
-  if (E.cfg.answer === 'keys') examNote(m);
+  if (E.cfg.answer === 'keys') examNote(m, audio().currentTime);
 }
 
 function examNext() {
@@ -1174,6 +1304,7 @@ function examNext() {
       !confirm(`Bu soruda ${n} notadan ${E.answer.length} tanesini cevapladın. Yine de geçmek istiyor musun?`)) return;
   stopExamAudio();
   exItem().answer = E.answer.slice();
+  exItem().times = E.times.slice();
   E.i++;
   if (E.i >= E.items.length) finishExam();
   else showQuestion();
@@ -1187,13 +1318,18 @@ function finishExam() {
   document.querySelectorAll('.tab').forEach(b => { b.disabled = false; });
   window.onbeforeunload = null;
 
-  const scores = E.items.map(itemScore);
+  const sc = E.items.map(it => scoreItem(it, E.cfg));
+  const avg = k => Math.round(100 * sc.reduce((a, x) => a + x[k], 0) / sc.length);
   const rec = {
     name: E.student.name, no: E.student.no,
     date: new Date().toISOString(),
     code: E.cfg.code, cfg: E.cfg,
-    score: Math.round(100 * scores.reduce((a, b) => a + b, 0) / scores.length),
-    items: E.items.map((it, i) => ({ t: it.target, d: it.durs, a: it.answer, s: scores[i] }))
+    score: avg('s'), pitch: avg('sp'), rhythm: avg('sr'),
+    items: E.items.map((it, i) => ({
+      t: it.target, d: it.durs, a: it.answer,
+      o: (it.times || []).map(x => Math.round((x - it.times[0]) * 1000)), // başlama anları (ms)
+      s: sc[i].s, sp: sc[i].sp, sr: sc[i].sr, rb: sc[i].rbad
+    }))
   };
   const all = store.get('exams', []);
   all.push(rec);
@@ -1207,10 +1343,13 @@ function showResult(rec) {
   shownRec = rec;
   $('exSetup').hidden = true; $('exRun').hidden = true; $('exResult').hidden = false;
   $('exRName').textContent = rec.name + (rec.no ? ` (${rec.no})` : '');
+  const rw = rec.cfg.rw || 0;
   $('exRMeta').textContent = `${new Date(rec.date).toLocaleString('tr-TR')} · Sınav kodu ${rec.code} · ` +
-    `${rec.items.length} soru · ${rec.cfg.answer === 'voice' ? 'sesle cevap' : 'piyanoyla cevap'}`;
+    `${rec.items.length} soru · ${rec.cfg.answer === 'voice' ? 'sesle cevap' : 'piyanoyla cevap'}` +
+    (rw ? ` · Perde ${rec.pitch} · Ritim ${rec.rhythm} (puanın %${rw}${rw === 50 ? "'si" : "'u"} ritim)` : ' · Ritim puanlanmadı');
   $('exRScore').textContent = rec.score;
 
+  const pct = v => v === undefined ? '—' : Math.round(v * 100) + '%';
   const body = $('exRBody');
   body.innerHTML = '';
   rec.items.forEach((it, i) => {
@@ -1222,11 +1361,15 @@ function showResult(rec) {
     if (!it.a.length) ans.textContent = '—';
     else align(it.t, it.a).ops.forEach(o => {
       const s = document.createElement(o.op === 'skip' ? 's' : 'span');
-      s.className = 'rn ' + o.op;
+      const rb = rw && o.aj !== undefined && (it.rb || []).includes(o.aj);
+      s.className = 'rn ' + o.op + (rb ? ' rbad' : '');
       s.textContent = noteName(o.op === 'skip' ? o.t : o.a);
+      if (rb) s.title = 'Bu notanın süresi (ritmi) hatalı';
       ans.appendChild(s);
     });
-    td(Math.round(it.s * 100) + '%');
+    td(pct(it.sp ?? it.s));
+    td(rw ? pct(it.sr) : '—');
+    td(pct(it.s));
     body.appendChild(tr);
   });
 }
@@ -1236,10 +1379,12 @@ function csvOf(recs) {
   const maxQ = Math.max(0, ...recs.map(r => r.items.length));
   const esc = v => { v = String(v ?? ''); return /[;"\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
   const head = ['Ad Soyad', 'Numara', 'Tarih', 'Sınav kodu', 'Cevap', 'Puan (100)',
+    'Perde (100)', 'Ritim (100)', 'Ritim payı (%)',
     ...Array.from({ length: maxQ }, (_, i) => `S${i + 1} (%)`)];
   const rows = recs.map(r => [
     r.name, r.no, new Date(r.date).toLocaleString('tr-TR'), r.code,
     r.cfg.answer === 'voice' ? 'ses' : 'piyano', r.score,
+    r.pitch ?? r.score, r.cfg.rw ? r.rhythm : '', r.cfg.rw || 0,
     ...r.items.map(it => Math.round(it.s * 100))
   ]);
   return '﻿' + [head, ...rows].map(r => r.map(esc).join(';')).join('\r\n');

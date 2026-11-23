@@ -50,6 +50,7 @@
           </select>
         </label>
         <label class="check"><input type="checkbox" id="mCount" checked> Giriş vuruşu (1 ölçü)</label>
+        <label class="check"><input type="checkbox" id="mREval" checked> Ritmi de değerlendir</label>
         <label class="check"><input type="checkbox" id="mAuto" checked> Otomatik seviye atla</label>
         <label class="check"><input type="checkbox" id="mShow"> Çalarken tuşları göster</label>
       </div>
@@ -184,6 +185,13 @@
               <option value="keys">Piyano / klavye ile</option>
             </select>
           </label>
+          <label>Ritim puanı
+            <select id="exRW">
+              <option value="0">Puanlanmasın (yalnız perde)</option>
+              <option value="30" selected>Puanın %30'u</option>
+              <option value="50">Puanın %50'si</option>
+            </select>
+          </label>
           <label class="check"><input type="checkbox" id="exDo" checked> Her ezgiden önce Do sesi</label>
           <label class="check"><input type="checkbox" id="exCount" checked> Giriş vuruşu (1 ölçü)</label>
           <label>Sınav kodu
@@ -251,12 +259,14 @@
           <div class="r-score"><span id="exRScore">0</span><small>/100</small></div>
         </div>
         <table class="r-table">
-          <thead><tr><th>#</th><th>Ezgi</th><th>Cevap</th><th>Puan</th></tr></thead>
+          <thead><tr><th>#</th><th>Ezgi</th><th>Cevap</th><th>Perde</th><th>Ritim</th><th>Puan</th></tr></thead>
           <tbody id="exRBody"></tbody>
         </table>
         <p class="hint-left">Puanlama: her soruda notalar sırayla karşılaştırılır; atlanan, fazladan ya da yanlış
-          her nota için bir nota puanı düşülür. Yeşil = doğru nota, kırmızı = yanlış/fazla nota,
-          <s>üstü çizili</s> = atlanan nota.</p>
+          her nota için bir nota puanı düşülür. Ritim: ardışık notaların başlama aralıkları ezgideki
+          sürelerle karşılaştırılır (öğrencinin kendi temposuna göre; son notanın süresi ölçülmez).
+          Yeşil = doğru nota, kırmızı = yanlış/fazla nota, <s>üstü çizili</s> = atlanan nota,
+          <span class="rn rbad">dalgalı çizgi</span> = süresi (ritmi) hatalı nota.</p>
         <div class="controls no-print">
           <button id="exCsv">⬇ Sonucu indir (Excel / CSV)</button>
           <button id="exPrint">🖨 Yazdır / PDF</button>

@@ -118,6 +118,7 @@ button.primary:hover { background: #5677f0; }
   background: currentColor;
   opacity: .55;
 }
+.slot .dur.rbad { background: var(--warn); opacity: 1; height: 5px; }
 
 /* ---------- Sesle cevap ---------- */
 .voice-hint {
@@ -326,6 +327,8 @@ button.small { padding: 3px 10px; font-size: .85rem; }
 .rn.ok { color: var(--good); }
 .rn.bad, .rn.extra { color: var(--bad); }
 .rn.skip { color: var(--muted); }
+/* Ritmi hatalı nota: turuncu dalgalı alt çizgi */
+.rn.rbad { text-decoration: underline wavy var(--warn); text-underline-offset: 4px; }
 
 @media print {
   body { background: #fff; color: #000; }
