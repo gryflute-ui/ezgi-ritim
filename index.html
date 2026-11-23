@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ezgi & Ritim Tekrarı</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🎵 Ezgi &amp; Ritim Tekrarı</h1>
+    <nav class="tabs">
+      <button class="tab active" data-tab="melody">Ezgi Tekrarı</button>
+      <button class="tab" data-tab="rhythm">Ritim Tekrarı</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ================= EZGİ ================= -->
+    <section id="melody" class="panel active">
+      <div class="settings">
+        <label>Nota sayısı
+          <input type="range" id="mLen" min="2" max="10" value="3">
+          <span id="mLenVal" class="val">3</span>
+        </label>
+        <label>Tempo
+          <input type="range" id="mBpm" min="50" max="160" value="90">
+          <span id="mBpmVal" class="val">90</span> BPM
+        </label>
+        <label>Dizi
+          <select id="mScale">
+            <option value="pent">Pentatonik (kolay)</option>
+            <option value="major" selected>Do majör</option>
+            <option value="chrom">Kromatik (zor)</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="mAuto" checked> Otomatik seviye atla</label>
+        <label class="check"><input type="checkbox" id="mShow"> Çalarken tuşları göster</label>
+      </div>
+
+      <div class="controls">
+        <button id="mNew" class="primary">▶ Yeni ezgi</button>
+        <button id="mReplay" disabled>↻ Tekrar dinle / dene</button>
+        <button id="mRef">Do sesini ver</button>
+      </div>
+
+      <div id="mSlots" class="slots"></div>
+      <p id="mMsg" class="msg">“Yeni ezgi”ye bas, dinle, sonra piyanoda aynısını çal.</p>
+
+      <div id="piano" class="piano"></div>
+      <p class="hint">Bilgisayar klavyesi: <kbd>A</kbd> <kbd>W</kbd> <kbd>S</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>T</kbd> <kbd>G</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>U</kbd> <kbd>J</kbd> <kbd>K</kbd> (Do → Do')</p>
+
+      <div class="stats">
+        Doğru: <b id="mScore">0</b> · Seri: <b id="mStreak">0</b> · En iyi seri: <b id="mBest">0</b>
+      </div>
+    </section>
+
+    <!-- ================= RİTİM ================= -->
+    <section id="rhythm" class="panel">
+      <div class="settings">
+        <label>Tempo
+          <input type="range" id="rBpm" min="50" max="140" value="80">
+          <span id="rBpmVal" class="val">80</span> BPM
+        </label>
+        <label>Seviye
+          <select id="rLevel">
+            <option value="1">Kolay (dörtlük)</option>
+            <option value="2" selected>Orta (sekizlik)</option>
+            <option value="3">Zor (on altılık)</option>
+          </select>
+        </label>
+        <label>Uzunluk
+          <select id="rBars">
+            <option value="1" selected>1 ölçü</option>
+            <option value="2">2 ölçü</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="rMetro" checked> Metronom</label>
+        <label class="check"><input type="checkbox" id="rShow"> Ritmi önceden göster</label>
+        <label>Gecikme düzeltmesi
+          <input type="range" id="rLat" min="-150" max="250" step="5" value="0">
+          <span id="rLatVal" class="val">0</span> ms
+        </label>
+      </div>
+
+      <div class="controls">
+        <button id="rNew" class="primary">▶ Yeni ritim</button>
+        <button id="rReplay" disabled>↻ Tekrar dinle</button>
+        <button id="rGo" disabled>🥁 Sıra bende (Enter)</button>
+      </div>
+
+      <div class="timeline-wrap">
+        <div id="rCount" class="count"></div>
+        <div id="rTimeline" class="timeline"><div id="rHead" class="head"></div></div>
+        <div class="legend">
+          <span><i class="lg note"></i>beklenen</span>
+          <span><i class="lg hit"></i>yakalandı</span>
+          <span><i class="lg miss"></i>kaçtı</span>
+          <span><i class="lg tap"></i>senin vuruşun</span>
+          <span><i class="lg extra"></i>fazla vuruş</span>
+        </div>
+      </div>
+
+      <p id="rMsg" class="msg">“Yeni ritim”e bas. 4 vuruşluk girişten sonra ritim çalar.</p>
+
+      <button id="tapPad" class="tap-pad">DOKUN<br><small>(Boşluk tuşu)</small></button>
+
+      <div class="stats">
+        Deneme: <b id="rTries">0</b> · Kusursuz: <b id="rPerfect">0</b> · Seri: <b id="rStreak">0</b> · En iyi seri: <b id="rBest">0</b>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
