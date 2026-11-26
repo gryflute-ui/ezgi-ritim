@@ -29,11 +29,13 @@
           <span id="mBpmVal" class="val">90</span> BPM
         </label>
         <label>Dizi
-          <select id="mScale">
-            <option value="pent">Pentatonik (kolay)</option>
-            <option value="major" selected>Do majör</option>
-            <option value="chrom">Kromatik (zor)</option>
-          </select>
+          <select id="mScale" data-fill="scale" data-default="major"></select>
+        </label>
+        <label>Ton
+          <select id="mTonic" data-fill="tonic" data-default="60" data-random="1"></select>
+        </label>
+        <label>Ölçü
+          <select id="mMeter" data-fill="meter" data-default="4/4"></select>
         </label>
         <label>Cevap
           <select id="mAnswer">
@@ -49,7 +51,7 @@
             <option value="mixed">Karışık (+ on altılık, üçleme)</option>
           </select>
         </label>
-        <label class="check"><input type="checkbox" id="mCount" checked> Giriş vuruşu (1 ölçü)</label>
+        <label class="check"><input type="checkbox" id="mCount" checked> Giriş vuruşu</label>
         <label class="check"><input type="checkbox" id="mREval" checked> Ritmi de değerlendir</label>
         <label class="check"><input type="checkbox" id="mAuto" checked> Otomatik seviye atla</label>
         <label class="check"><input type="checkbox" id="mShow"> Çalarken tuşları göster</label>
@@ -67,17 +69,20 @@
         Aynı nota üst üste geliyorsa araya kısa bir boşluk bırak.
       </p>
 
+      <p id="mKeyInfo" class="key-info"></p>
       <div id="mSlots" class="slots"></div>
       <div id="mMic" class="mic-live">
         <span>🎤 Duyulan:</span> <b id="mMicNote">–</b>
         <span class="meter"><i id="mMicLevel"></i></span>
       </div>
       <p id="mMsg" class="msg">“Yeni ezgi”ye bas, dinle, sonra piyanoda aynısını çal.</p>
+      <div id="mStaff" class="staff-box" hidden></div>
 
       <!-- Piyano: sınavda klavyeyle cevap seçilirse Sınav sekmesine taşınır -->
       <div id="pianoBox">
         <div id="piano" class="piano"></div>
-        <p class="hint">Bilgisayar klavyesi: <kbd>A</kbd> <kbd>W</kbd> <kbd>S</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>T</kbd> <kbd>G</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>U</kbd> <kbd>J</kbd> <kbd>K</kbd> (Do → Do')</p>
+        <p class="hint">Bilgisayar klavyesi: <kbd>A</kbd> <kbd>W</kbd> <kbd>S</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>T</kbd> <kbd>G</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>U</kbd> <kbd>J</kbd> <kbd>K</kbd>
+          = bir oktav (şu an <b id="kbOct">Do4–Do5</b>, piyanoda çerçeveli) · <kbd>Z</kbd> alt oktav · <kbd>X</kbd> üst oktav</p>
       </div>
 
       <div class="stats">
@@ -92,17 +97,26 @@
           <input type="range" id="rBpm" min="50" max="140" value="80">
           <span id="rBpmVal" class="val">80</span> BPM
         </label>
+        <label>Alıştırma
+          <select id="rMode">
+            <option value="listen" selected>🎧 Dinle ve tekrar et</option>
+            <option value="read">📖 Notadan oku ve çal</option>
+          </select>
+        </label>
+        <label>Ölçü
+          <select id="rMeter" data-fill="meter" data-default="4/4"></select>
+        </label>
         <label>Seviye
           <select id="rLevel">
-            <option value="1">Kolay (dörtlük)</option>
-            <option value="2" selected>Orta (sekizlik)</option>
-            <option value="3">Zor (on altılık)</option>
+            <option value="simple">Kolay (dörtlük, sekizlik, ikilik)</option>
+            <option value="dotted" selected>Orta (+ noktalı, senkop)</option>
+            <option value="mixed">Zor (+ on altılık, üçleme)</option>
           </select>
         </label>
         <label>Uzunluk
           <select id="rBars">
-            <option value="1" selected>1 ölçü</option>
-            <option value="2">2 ölçü</option>
+            <option value="1">1 ölçü</option>
+            <option value="2" selected>2 ölçü</option>
           </select>
         </label>
         <label class="check"><input type="checkbox" id="rMetro" checked> Metronom</label>
@@ -115,9 +129,11 @@
 
       <div class="controls">
         <button id="rNew" class="primary">▶ Yeni ritim</button>
-        <button id="rReplay" disabled>↻ Tekrar dinle</button>
+        <button id="rReplay" disabled>↻ Dinle</button>
         <button id="rGo" disabled>🥁 Sıra bende (Enter)</button>
       </div>
+
+      <div id="rNotation" class="staff-box" hidden></div>
 
       <div class="timeline-wrap">
         <div id="rCount" class="count"></div>
@@ -131,7 +147,7 @@
         </div>
       </div>
 
-      <p id="rMsg" class="msg">“Yeni ritim”e bas. 4 vuruşluk girişten sonra ritim çalar.</p>
+      <p id="rMsg" class="msg">“Yeni ritim”e bas. Girişten sonra ritim çalar.</p>
 
       <button id="tapPad" class="tap-pad">DOKUN<br><small>(Boşluk tuşu)</small></button>
 
@@ -143,10 +159,35 @@
     <!-- ================= SINAV ================= -->
     <section id="exam" class="panel">
 
-      <!-- 1) Hazırlık: öğretmen ayarları + öğrenci girişi -->
+      <!-- 1) Hazırlık: öğretmen girişi, ayarlar, öğrenci girişi -->
       <div id="exSetup">
+        <!-- Öğretmen (yönetici) girişi -->
+        <div id="exAdmin" class="admin-bar">
+          <span id="exAdminStatus"></span>
+          <span class="admin-btns">
+            <button id="exAdminCreate" class="small">🔐 Öğretmen şifresi oluştur</button>
+            <button id="exAdminLogin" class="small">Öğretmen girişi</button>
+            <button id="exAdminChange" class="small">Şifreyi değiştir</button>
+            <button id="exAdminLogout" class="small">Çıkış</button>
+          </span>
+        </div>
+        <form id="exAdminForm" class="admin-form" hidden autocomplete="off">
+          <b id="exAdminTitle"></b>
+          <input type="password" id="exPw1" placeholder="Şifre" autocomplete="new-password">
+          <input type="password" id="exPw2" placeholder="Şifre (tekrar)" autocomplete="new-password">
+          <button type="submit" id="exAdminOk" class="primary small">Tamam</button>
+          <button type="button" id="exAdminCancel" class="small">Vazgeç</button>
+          <button type="button" id="exAdminForgot" class="link small">Şifremi unuttum</button>
+          <span id="exAdminMsg" class="admin-msg"></span>
+        </form>
+
         <h2>Sınav ayarları <small id="exLockedNote" hidden>· öğretmen tarafından belirlendi</small></h2>
         <fieldset id="exCfg" class="settings exam-cfg">
+          <label class="types">Soru türleri
+            <span><input type="checkbox" id="exTypeM" checked> 🎵 Ezgi</span>
+            <span><input type="checkbox" id="exTypeRD"> 🎧 Ritim (dinleme)</span>
+            <span><input type="checkbox" id="exTypeRR"> 📖 Ritim (okuma)</span>
+          </label>
           <label>Soru sayısı
             <input type="number" id="exQ" min="1" max="40" value="10">
           </label>
@@ -155,11 +196,13 @@
             <input type="number" id="exNmax" min="2" max="10" value="6">
           </label>
           <label>Dizi
-            <select id="exScale">
-              <option value="pent">Pentatonik</option>
-              <option value="major" selected>Do majör</option>
-              <option value="chrom">Kromatik</option>
-            </select>
+            <select id="exScale" data-fill="scale" data-default="major"></select>
+          </label>
+          <label>Ton
+            <select id="exTonic" data-fill="tonic" data-default="60" data-random="1"></select>
+          </label>
+          <label>Ölçü
+            <select id="exMeter" data-fill="meter" data-default="4/4"></select>
           </label>
           <label>Ritim
             <select id="exRhythm">
@@ -167,6 +210,12 @@
               <option value="simple" selected>Basit</option>
               <option value="dotted">Noktalı</option>
               <option value="mixed">Karışık</option>
+            </select>
+          </label>
+          <label>Ritim sorusu uzunluğu
+            <select id="exBars">
+              <option value="1">1 ölçü</option>
+              <option value="2" selected>2 ölçü</option>
             </select>
           </label>
           <label>Tempo
@@ -179,13 +228,13 @@
               <option value="3">3 kez</option>
             </select>
           </label>
-          <label>Cevap
+          <label>Ezgi cevabı
             <select id="exAnswer">
               <option value="voice" selected>🎤 Sesle (söyleyerek)</option>
               <option value="keys">Piyano / klavye ile</option>
             </select>
           </label>
-          <label>Ritim puanı
+          <label>Ezgide ritim puanı
             <select id="exRW">
               <option value="0">Puanlanmasın (yalnız perde)</option>
               <option value="30" selected>Puanın %30'u</option>
@@ -193,12 +242,13 @@
             </select>
           </label>
           <label class="check"><input type="checkbox" id="exDo" checked> Her ezgiden önce Do sesi</label>
-          <label class="check"><input type="checkbox" id="exCount" checked> Giriş vuruşu (1 ölçü)</label>
+          <label class="check"><input type="checkbox" id="exCount" checked> Ezgiden önce giriş vuruşu</label>
           <label>Sınav kodu
             <input type="text" id="exCode" maxlength="12" size="8" spellcheck="false">
           </label>
         </fieldset>
-        <p class="hint-left">Aynı kod ve aynı ayarlarla giren her öğrenci <b>aynı soruları</b> alır.</p>
+        <p class="hint-left">Aynı kod ve aynı ayarlarla giren her öğrenci <b>aynı soruları</b> alır.
+          Birden çok soru türü seçilirse sorular sırayla dönüşümlü gelir. Ton “Rastgele” ise her ezgi farklı tondan başlar.</p>
 
         <div id="exTeacher" class="teacher-box">
           <button id="exLinkBtn">🔗 Öğrenci bağlantısını oluştur ve kopyala</button>
@@ -236,12 +286,13 @@
       <div id="exRun" hidden>
         <div class="exam-head">
           <span id="exWho"></span>
-          <span>Soru <b id="exNum">1</b> / <b id="exTotal">10</b></span>
+          <span><span id="exKind"></span> · Soru <b id="exNum">1</b> / <b id="exTotal">10</b></span>
         </div>
         <div class="progress"><i id="exProg"></i></div>
 
         <div class="controls">
           <button id="exPlay" class="primary">▶ Dinle</button>
+          <button id="exGo" hidden>🥁 Çalmaya başla (Enter)</button>
           <button id="exRedo" disabled>↺ Cevabı sil, yeniden cevapla</button>
           <button id="exNext" disabled>Sonraki soru →</button>
         </div>
@@ -250,6 +301,11 @@
         <div id="exMic" class="mic-live">
           <span>🎤 Duyulan:</span> <b id="exMicNote">–</b>
           <span class="meter"><i id="exMicLevel"></i></span>
+        </div>
+        <div id="exRhythmBox" hidden>
+          <div id="exNotation" class="staff-box"></div>
+          <div class="ex-count"><span id="exCount"></span></div>
+          <button id="exTap" class="tap-pad">DOKUN<br><small>(Boşluk tuşu)</small></button>
         </div>
         <p id="exMsg" class="msg"></p>
         <div id="exPianoHost"></div>
@@ -265,14 +321,15 @@
           <div class="r-score"><span id="exRScore">0</span><small>/100</small></div>
         </div>
         <table class="r-table">
-          <thead><tr><th>#</th><th>Ezgi</th><th>Cevap</th><th>Perde</th><th>Ritim</th><th>Puan</th></tr></thead>
+          <thead><tr><th>#</th><th>Soru</th><th>Cevap</th><th>Perde</th><th>Ritim</th><th>Puan</th></tr></thead>
           <tbody id="exRBody"></tbody>
         </table>
-        <p class="hint-left">Puanlama: her soruda notalar sırayla karşılaştırılır; atlanan, fazladan ya da yanlış
-          her nota için bir nota puanı düşülür. Ritim: ardışık notaların başlama aralıkları ezgideki
-          sürelerle karşılaştırılır (öğrencinin kendi temposuna göre; son notanın süresi ölçülmez).
-          Yeşil = doğru nota, kırmızı = yanlış/fazla nota, <s>üstü çizili</s> = atlanan nota,
-          <span class="rn rbad">dalgalı çizgi</span> = süresi (ritmi) hatalı nota.</p>
+        <p class="hint-left">Puanlama — <b>ezgi</b>: notalar sırayla karşılaştırılır; atlanan, fazladan ya da yanlış
+          her nota için bir nota puanı düşülür. Ezginin ritmi: ardışık notaların başlama aralıkları nota süreleriyle
+          karşılaştırılır (öğrencinin kendi temposuna göre; son notanın süresi ölçülmez).
+          <b>Ritim soruları</b>: yakalanan vuruş / (beklenen vuruş + fazla vuruş).
+          Yeşil = doğru, kırmızı = yanlış/fazla nota, <s>üstü çizili</s> = atlanan nota,
+          <span class="rn rbad">dalgalı çizgi</span> = süresi (ritmi) hatalı nota. “♪ nota” düğmesiyle sorunun notasını görebilirsin.</p>
         <div class="controls no-print">
           <button id="exCsv">⬇ Sonucu indir (Excel / CSV)</button>
           <button id="exPrint">🖨 Yazdır / PDF</button>
@@ -282,6 +339,7 @@
     </section>
   </main>
 
+  <script src="notation.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

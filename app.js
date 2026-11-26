@@ -52,20 +52,27 @@ function pianoParts() {
   return { wave: pianoWave, noise: noiseBuf };
 }
 
-function tone(midi, when, dur = 0.45, vol = 0.3, dest = audio().destination) {
+// Bırakış: susturucu inince sesin sönme hızı (zaman sabiti, sn) ve sesin tamamen
+// sönmesi için gereken süre. Mikrofon bu süre kadar bekledikten sonra açılır.
+const PIANO_RELEASE = 0.16;
+const PIANO_TAIL = PIANO_RELEASE * 6 + 0.1;
+// Tuşa basınca notanın çınlama süresi (sn)
+const KEY_SUSTAIN = 1.6;
+
+function tone(midi, when, dur = KEY_SUSTAIN, vol = 0.3, dest = audio().destination) {
   const a = audio();
   const { wave, noise } = pianoParts();
   const f = midiToFreq(midi);
   const end = when + Math.max(dur, 0.12);         // susturucunun indiği an
-  const decay = 1.6 * Math.pow(261.6 / f, 0.5);   // pes notalar daha uzun çınlar
+  const decay = 3.2 * Math.pow(261.6 / f, 0.5);   // uzun kuyruk; pes notalar daha uzun çınlar
 
   const out = a.createGain();
   out.gain.setValueAtTime(0.0001, when);
   out.gain.exponentialRampToValueAtTime(vol, when + 0.004);
-  out.gain.setTargetAtTime(vol * 0.35, when + 0.004, 0.09);  // ilk hızlı düşüş
-  out.gain.setTargetAtTime(0.0001, when + 0.3, decay);        // uzun kuyruk
+  out.gain.setTargetAtTime(vol * 0.5, when + 0.004, 0.12);   // ilk düşüş
+  out.gain.setTargetAtTime(0.0001, when + 0.35, decay);       // uzun kuyruk
   out.gain.cancelScheduledValues(end);
-  out.gain.setTargetAtTime(0.0001, end, 0.07);                // bırakış
+  out.gain.setTargetAtTime(0.0001, end, PIANO_RELEASE);       // bırakış (susturucu)
   out.connect(dest);
 
   const lp = a.createBiquadFilter();
@@ -75,7 +82,7 @@ function tone(midi, when, dur = 0.45, vol = 0.3, dest = audio().destination) {
   lp.frequency.setTargetAtTime(Math.min(f * 3, 8000), when + 0.01, 0.35);
   lp.connect(out);
 
-  const stopAt = end + 0.5;
+  const stopAt = end + PIANO_TAIL;
   [-1.5, 1.5].forEach(cents => {
     const o = a.createOscillator();
     o.setPeriodicWave(wave);
@@ -150,18 +157,93 @@ document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () =>
 /* =========================================================
    EZGİ TEKRARI
    ========================================================= */
+/* ---------------- Müzik kuramı: ölçüler, diziler, tonlar, adlandırma ---------------- */
 const NAMES = ['Do', 'Do#', 'Re', 'Re#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
-const noteName = m => NAMES[m % 12] + (m >= 72 ? "'" : '');
+const LETTERS = ['Do', 'Re', 'Mi', 'Fa', 'Sol', 'La', 'Si'];
+const LETTER_PC = [0, 2, 4, 5, 7, 9, 11];
 
-const SCALES = {
-  pent:  [60, 62, 64, 67, 69, 72],
-  major: [60, 62, 64, 65, 67, 69, 71, 72],
-  chrom: [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72]
+// Ölçüler. Vuruş (beat) birimi: basit ölçülerde dörtlük, 6/8'de noktalı dörtlük.
+// beatQ: bir vuruş kaç dörtlük; barQ: bir ölçü kaç dörtlük. Tempo (BPM) vuruşa göredir.
+const METERS = {
+  '4/4': { key: '4/4', num: 4, den: 4, beats: 4, beatQ: 1, barQ: 4, compound: false },
+  '3/4': { key: '3/4', num: 3, den: 4, beats: 3, beatQ: 1, barQ: 3, compound: false },
+  '2/4': { key: '2/4', num: 2, den: 4, beats: 2, beatQ: 1, barQ: 2, compound: false },
+  '6/8': { key: '6/8', num: 6, den: 8, beats: 2, beatQ: 1.5, barQ: 3, compound: true }
+};
+const meterOf = k => METERS[k] || METERS['4/4'];
+// Giriş vuruşu: bir ölçü; 2/4 ve 6/8'de iki ölçü (yoksa çok kısa kalır)
+const countInBeats = mt => mt.beats >= 3 ? mt.beats : mt.beats * 2;
+
+// Diziler: tondan itibaren yarım ses aralıkları (iv) ve her derecenin harf (nota adı) kayması (let).
+// Makamlar 12 eşit perdeye (piyano perdelerine) yaklaştırılmıştır.
+const SCALE_DEFS = {
+  major:    { label: 'Majör',                 iv: [0, 2, 4, 5, 7, 9, 11], let: [0, 1, 2, 3, 4, 5, 6] },
+  pent:     { label: 'Pentatonik',            iv: [0, 2, 4, 7, 9],        let: [0, 1, 2, 4, 5] },
+  minor:    { label: 'Doğal minör',           iv: [0, 2, 3, 5, 7, 8, 10], let: [0, 1, 2, 3, 4, 5, 6] },
+  harmonic: { label: 'Armonik minör',         iv: [0, 2, 3, 5, 7, 8, 11], let: [0, 1, 2, 3, 4, 5, 6] },
+  melodic:  { label: 'Melodik minör (çıkıcı)', iv: [0, 2, 3, 5, 7, 9, 11], let: [0, 1, 2, 3, 4, 5, 6] },
+  hicaz:    { label: 'Hicaz (≈)',             iv: [0, 1, 4, 5, 7, 8, 10], let: [0, 1, 2, 3, 4, 5, 6] },
+  kurdi:    { label: 'Kürdi (≈)',             iv: [0, 1, 3, 5, 7, 8, 10], let: [0, 1, 2, 3, 4, 5, 6] },
+  nihavend: { label: 'Nihavend (≈)',          iv: [0, 2, 3, 5, 7, 8, 11], let: [0, 1, 2, 3, 4, 5, 6] },
+  chrom:    { label: 'Kromatik',              iv: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], let: null }
+};
+// Eski sürümle uyum: SCALES[ad] doğrulama için kullanılır
+const SCALES = SCALE_DEFS;
+
+// Ton (dizinin başladığı nota): MIDI, harf, değiştirme
+const TONICS = {
+  60: { label: 'Do',  letter: 0, acc: 0 },  62: { label: 'Re',  letter: 1, acc: 0 },
+  63: { label: 'Mi♭', letter: 2, acc: -1 }, 64: { label: 'Mi',  letter: 2, acc: 0 },
+  65: { label: 'Fa',  letter: 3, acc: 0 },  67: { label: 'Sol', letter: 4, acc: 0 },
+  69: { label: 'La',  letter: 5, acc: 0 },  70: { label: 'Si♭', letter: 6, acc: -1 }
 };
 
-// Ritim kalıpları: her hücre bir ya da iki vuruşu doldurur (süreler vuruş cinsinden).
-// Hücreler hep tam vuruşta biter, böylece ezgi vuruşa oturur.
-const T = 1 / 3;
+// Bir dizi + ton için "anahtar" (ezgi bağlamı): notalar ve adlandırma bilgisi
+function makeKey(scale, tonic) {
+  const def = SCALE_DEFS[scale] || SCALE_DEFS.major;
+  tonic = TONICS[tonic] ? +tonic : 60;
+  const notes = def.iv.map(i => tonic + i).concat(tonic + 12);
+  let flats = TONICS[tonic].acc < 0;
+  if (def.let) {
+    def.iv.forEach((iv, d) => {
+      const letter = (TONICS[tonic].letter + def.let[d]) % 7;
+      const acc = (((tonic + iv - LETTER_PC[letter]) % 12) + 18) % 12 - 6;
+      if (acc < 0) flats = true;
+    });
+  }
+  return { scale: def === SCALE_DEFS[scale] ? scale : 'major', tonic, flats, notes };
+}
+
+// Notanın yazımı: harf, değiştirme (−1/0/1), oktav (Do4 = orta Do)
+function spell(m, key) {
+  let letter, acc;
+  const def = key && SCALE_DEFS[key.scale];
+  if (def && def.let) {
+    const iv = (((m - key.tonic) % 12) + 12) % 12;
+    const d = def.iv.indexOf(iv);
+    if (d >= 0) {
+      letter = (TONICS[key.tonic].letter + def.let[d]) % 7;
+      acc = (((m - LETTER_PC[letter]) % 12) + 18) % 12 - 6;
+    }
+  }
+  if (letter === undefined) {
+    const pc = ((m % 12) + 12) % 12;
+    const useFlat = key && key.flats && !LETTER_PC.includes(pc);
+    if (useFlat) { letter = LETTER_PC.indexOf(pc + 1); acc = -1; }
+    else { letter = LETTER_PC.lastIndexOf(LETTER_PC.filter(x => x <= pc).pop()); acc = pc - LETTER_PC[letter]; }
+  }
+  const oct = Math.floor((m - acc) / 12) - 1;
+  return { letter, acc, oct };
+}
+function noteName(m, key) {
+  const s = spell(m, key);
+  return LETTERS[s.letter] + (s.acc > 0 ? '#'.repeat(s.acc) : '♭'.repeat(-s.acc)) + "'".repeat(Math.max(0, s.oct - 4));
+}
+// Porte konumu: alt çizgi Mi4 = 0
+const staffStep = s => (s.oct - 4) * 7 + s.letter - 2;
+
+// Ritim kalıpları: her hücre tam vuruş(lar)ı doldurur (süreler vuruş cinsinden).
+const T = 1 / 3, S6 = 1 / 6;
 const RCELLS = {
   even:   [[1]],
   simple: [[1], [1], [0.5, 0.5], [2]],
@@ -169,37 +251,108 @@ const RCELLS = {
   mixed:  [[1], [0.5, 0.5], [2], [1.5, 0.5], [0.75, 0.25], [0.5, 1, 0.5],
            [0.25, 0.25, 0.5], [0.5, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25], [T, T, T]]
 };
+// 6/8 (bileşik ölçü): vuruş = noktalı dörtlük; 1/3 = sekizlik, 2/3 = dörtlük, 1/6 = on altılık
+const RCELLS_C = {
+  even:   [[1]],
+  simple: [[1], [1], [2 / 3, T], [T, T, T], [2]],
+  dotted: [[1], [2 / 3, T], [T, T, T], [2], [T, 2 / 3], [0.5, S6, T]],
+  mixed:  [[1], [2 / 3, T], [T, T, T], [2], [T, 2 / 3], [0.5, S6, T],
+           [S6, S6, T, T], [T, S6, S6, T], [S6, S6, S6, S6, T]]
+};
+const cellsFor = (style, mt) => ((mt.compound ? RCELLS_C : RCELLS)[style]) || RCELLS.even;
+const cellBeats = c => c.reduce((a, b) => a + b, 0);
+const EPS = 1e-6;
 
-function genDurations(n, style, rng = Math.random) {
-  const cells = RCELLS[style] || RCELLS.even;
+// n notalık ezgi için süreler. Hücreler ölçü çizgisini aşmaz; son nota ölçünün sonuna kadar sürer.
+function genDurations(n, style, rng = Math.random, meter = METERS['4/4']) {
+  const cells = cellsFor(style, meter);
   let best = null;
   for (let tries = 0; tries < 30; tries++) {
     const out = [];
+    let inBar = 0; // ölçü içindeki konum (vuruş)
     // Son nota hariç hepsini tam hücrelerle doldur (kalıplar yarıda kesilmesin)
     while (out.length < n - 1) {
-      const fit = cells.filter(c => c.length <= n - 1 - out.length);
-      out.push(...pick(fit, rng));
+      const left = meter.beats - inBar;
+      const fit = cells.filter(c => c.length <= n - 1 - out.length && cellBeats(c) <= left + EPS);
+      const c = pick(fit.length ? fit : [[1]], rng);
+      out.push(...c);
+      inBar += cellBeats(c);
+      if (inBar >= meter.beats - EPS) inBar = 0;
     }
-    // Son nota vuruş başında başlar, en az bir vuruş sürer (ezgi "bitmiş" duyulsun)
-    out.push(style === 'even' ? 1 : pick([1, 1, 2], rng));
+    // Son nota vuruş başında başlar ve ölçüyü tamamlar (ezgi "bitmiş" duyulsun)
+    out.push(style === 'even' ? 1 : (inBar ? meter.beats - inBar : meter.beats));
     best = out;
     // Düz olmayan stillerde en az bir farklı süre olsun
-    if (style === 'even' || n < 2 || out.slice(0, -1).some(d => d !== 1)) break;
+    if (style === 'even' || n < 2 || out.slice(0, -1).some(d => Math.abs(d - 1) > EPS)) break;
   }
   return best;
 }
 
-function durName(d) {
-  if (Math.abs(d - T) < 0.01) return 'üçleme sekizlik';
-  return ({ 2: 'ikilik', 1.5: 'noktalı dörtlük', 1: 'dörtlük', 0.75: 'noktalı sekizlik',
-            0.5: 'sekizlik', 0.25: 'on altılık' })[d] || `${d} vuruş`;
+// Belirli sayıda ölçüyü tam dolduran ritim (ritim tekrarı / okuma için)
+function genRhythmBars(bars, style, rng = Math.random, meter = METERS['4/4']) {
+  const cells = cellsFor(style, meter);
+  let out;
+  for (let tries = 0; tries < 40; tries++) {
+    out = [];
+    for (let b = 0; b < bars; b++) {
+      let inBar = 0;
+      while (inBar < meter.beats - EPS) {
+        const fit = cells.filter(c => cellBeats(c) <= meter.beats - inBar + EPS);
+        const c = pick(fit, rng);
+        out.push(...c);
+        inBar += cellBeats(c);
+      }
+    }
+    const varied = style === 'even' || out.some(d => Math.abs(d - out[0]) > EPS);
+    if (out.length >= Math.min(3, bars * meter.beats) && varied) break;
+  }
+  return out;
 }
 
-// Fiziksel tuş konumuna göre (klavye düzeninden bağımsız)
+// Süre adı (dörtlük, sekizlik …); d vuruş cinsinden
+function durName(d, meter = METERS['4/4']) {
+  if (!meter.compound && Math.abs(d - T) < 0.01) return 'üçleme sekizlik';
+  const q = d * meter.beatQ;
+  const names = [[4, 'birlik'], [3, 'noktalı ikilik'], [2, 'ikilik'], [1.5, 'noktalı dörtlük'], [1, 'dörtlük'],
+                 [0.75, 'noktalı sekizlik'], [0.5, 'sekizlik'], [0.25, 'on altılık']];
+  const f = names.find(([v]) => Math.abs(v - q) < 0.01);
+  return f ? f[1] : `${+d.toFixed(2)} vuruş`;
+}
+const durSet = mt => mt.compound ? [2, 1, 2 / 3, 0.5, T, S6] : [4, 3, 2, 1.5, 1, 0.75, 0.5, T, 0.25];
+
+// Ezgiyi/ritmi porte için hazırla: süreler vuruştan dörtlüğe çevrilir
+function toStaff(target, durs, meter, key, colorOf) {
+  return durs.map((d, i) => {
+    const n = { q: d * meter.beatQ, triplet: !meter.compound && Math.abs(d - T) < 0.01 };
+    if (target) { const s = spell(target[i], key); n.step = staffStep(s); n.acc = s.acc; }
+    if (colorOf) Object.assign(n, colorOf(i));
+    return n;
+  });
+}
+function staffSvg(target, durs, meter, key, colorOf) {
+  return Notation.svg({ notes: toStaff(target, durs, meter, key, colorOf), meter, percussion: !target });
+}
+
+// Dizi / ton / ölçü açılır listelerini doldur (data-fill="scale|tonic|meter")
+(function fillSelects() {
+  document.querySelectorAll('select[data-fill]').forEach(sel => {
+    const kind = sel.dataset.fill;
+    const opts = kind === 'scale' ? Object.entries(SCALE_DEFS).map(([k, d]) => [k, d.label])
+      : kind === 'tonic' ? Object.entries(TONICS).map(([k, t]) => [k, t.label])
+      : Object.keys(METERS).map(k => [k, k]);
+    if (sel.dataset.random) opts.push(['rand', 'Rastgele']);
+    sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    sel.value = sel.dataset.default;
+  });
+})();
+
+// Bilgisayar klavyesi: fiziksel tuş konumuna göre (klavye düzeninden bağımsız).
+// A…K bir oktav; Z / X ile bir oktav aşağı/yukarı kaydırılır.
 const KEYMAP = {
-  KeyA: 60, KeyW: 61, KeyS: 62, KeyE: 63, KeyD: 64, KeyF: 65, KeyT: 66,
-  KeyG: 67, KeyY: 68, KeyH: 69, KeyU: 70, KeyJ: 71, KeyK: 72
+  KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6,
+  KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12
 };
+let kbOctave = 0; // 0: Do4–Do5, 12: Do5–Do6
 
 const mLen = bindRange('mLen');
 const mBpm = bindRange('mBpm');
@@ -207,6 +360,8 @@ const mMsg = $('mMsg');
 
 const M = {
   target: [], durs: [], input: [], phase: 'idle', revealed: false,
+  key: makeKey('major', 60),   // dizi + ton (nota adları için)
+  meter: METERS['4/4'],
   times: [],      // cevap notalarının başlama anları (ritim için)
   beat: 0.75,     // çalınan ezginin vuruş süresi (sn)
   rbad: [],       // ritmi hatalı notaların sırası
@@ -223,8 +378,7 @@ const M = {
    ========================================================= */
 const RHYTHM_TOL = 0.35;                  // log2 cinsinden tolerans (%22 kısa … %27 uzun)
 const TEMPO_MIN = 0.67, TEMPO_MAX = 1.5;  // duyulan tempoya göre kabul edilen vuruş süresi aralığı
-const DUR_SET = [2, 1.5, 1, 0.75, 0.5, T, 0.25];
-const nearestDur = b => DUR_SET.reduce((best, d) => Math.abs(Math.log2(b / d)) < Math.abs(Math.log2(b / best)) ? d : best);
+const nearestDur = (b, mt) => durSet(mt).reduce((best, d) => Math.abs(Math.log2(b / d)) < Math.abs(Math.log2(b / best)) ? d : best);
 
 function rhythmEval(target, durs, answer, times, beatSec) {
   const total = target.length - 1;
@@ -278,13 +432,13 @@ function rhythmEval(target, durs, answer, times, beatSec) {
 }
 
 // Ritim hatalarını okunur metne çevirir
-function rhythmText(r) {
+function rhythmText(r, meter = METERS['4/4']) {
   const bad = r.items.filter(x => !x.ok);
   const parts = bad.slice(0, 3).map(x => {
-    const near = nearestDur(x.sung);
+    const near = nearestDur(x.sung, meter);
     const how = x.err < 0 ? 'kısa' : 'uzun';
-    return near !== x.beats
-      ? `${x.i + 1}. nota ${how} (${durName(x.beats)} yerine ${durName(near)} gibi)`
+    return Math.abs(near - x.beats) > EPS
+      ? `${x.i + 1}. nota ${how} (${durName(x.beats, meter)} yerine ${durName(near, meter)} gibi)`
       : `${x.i + 1}. nota biraz ${how}`;
   });
   if (bad.length > 3) parts.push(`+${bad.length - 3} hata daha`);
@@ -302,8 +456,14 @@ function tempoText(r, verb = 'söyledin') {
 /* --- Piyanoyu oluştur --- */
 const piano = $('piano');
 const keyEls = {};
-const WHITES = [60, 62, 64, 65, 67, 69, 71, 72];
-const BLACKS = { 61: 0, 63: 1, 66: 3, 68: 4, 70: 5 }; // hangi beyaz tuştan sonra
+// İki oktav: Do4 (60) – Do6 (84). Beyaz tuşlar eşit genişlikte, siyahlar aralarına.
+const PIANO_LO = 60, PIANO_HI = 84;
+const WHITES = [], BLACKS = {};
+for (let m = PIANO_LO; m <= PIANO_HI; m++) {
+  if (LETTER_PC.includes(m % 12)) WHITES.push(m);
+  else BLACKS[m] = WHITES.length - 1; // hangi beyaz tuştan sonra
+}
+const whiteW = 100 / WHITES.length;
 WHITES.forEach(m => {
   const k = document.createElement('div');
   k.className = 'key white'; k.dataset.midi = m;
@@ -313,10 +473,17 @@ WHITES.forEach(m => {
 Object.entries(BLACKS).forEach(([m, i]) => {
   const k = document.createElement('div');
   k.className = 'key black'; k.dataset.midi = m;
-  k.style.left = `calc(${(i + 1) * 12.5}% - 3.75%)`;
+  k.style.left = `calc(${(i + 1) * whiteW}% - ${whiteW * 0.3}%)`;
+  k.style.width = (whiteW * 0.6) + '%';
   k.innerHTML = `<span>${noteName(+m)}</span>`;
   piano.appendChild(k); keyEls[m] = k;
 });
+// Bilgisayar klavyesinin çaldığı oktavı piyanoda göster
+function markKbOctave() {
+  Object.entries(keyEls).forEach(([m, k]) => k.classList.toggle('kb', m >= 60 + kbOctave && m <= 72 + kbOctave));
+  const o = $('kbOct'); if (o) o.textContent = kbOctave ? 'Do5–Do6' : 'Do4–Do5';
+}
+markKbOctave();
 piano.addEventListener('pointerdown', e => {
   const k = e.target.closest('.key');
   if (!k) return;
@@ -339,10 +506,10 @@ function renderSlots() {
     const inp = M.input[i];
     let label = '?';
     if (inp !== undefined) {
-      label = noteName(inp);
+      label = noteName(inp, M.key);
       d.classList.add(inp === t ? 'ok' : 'bad');
     } else if (M.revealed) {
-      label = noteName(t);
+      label = noteName(t, M.key);
       d.classList.add('reveal');
     }
     const name = document.createElement('span');
@@ -356,10 +523,26 @@ function renderSlots() {
       const rb = M.rbad.includes(i);
       bar.className = 'dur' + (rb ? ' rbad' : '');
       bar.style.width = Math.min(100, dur * 50) + '%';
-      d.title = durName(dur) + (rb ? ' — ritim hatalı' : '');
+      d.title = durName(dur, M.meter) + (rb ? ' — ritim hatalı' : '');
       d.appendChild(bar);
     }
     box.appendChild(d);
+  });
+  renderMStaff();
+}
+
+// Cevap bitince (ya da doğru ezgi gösterilince) ezgiyi portede göster
+const COL = { ok: '#3ecf8e', bad: '#ff5d6c', warn: '#ffb547', muted: '#9097a8' };
+function renderMStaff() {
+  const box = $('mStaff');
+  const done = M.target.length && M.phase === 'idle' && (M.revealed || M.input.length === M.target.length);
+  box.hidden = !done;
+  if (!done) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="staff-title">Ezginin notası</div>' + staffSvg(M.target, M.durs, M.meter, M.key, i => {
+    const a = M.input[i];
+    if (a === undefined) return { color: COL.muted };
+    if (a !== M.target[i]) { const s = spell(a, M.key); return { color: COL.warn, ghost: { step: staffStep(s), acc: s.acc, color: COL.bad } }; }
+    return { color: M.rbad.includes(i) ? COL.warn : COL.ok };
   });
 }
 
@@ -385,31 +568,34 @@ function genMelody(n, scale, rng = Math.random) {
    keysAt: klavyeyle cevabın açılacağı an, micAt: mikrofonun açılacağı an
    (son nota tamamen sönünce, hoparlör sesi algılanmasın),
    notes: [midi, süre(sn), başlama(sn)] — tuş yakmak için. */
-function playSeq(target, durs, { bpm, countIn = 0, refDo = false, bus }) {
+function playSeq(target, durs, { bpm, countIn = 0, refDo = false, bus, meter = METERS['4/4'] }) {
   const a = audio();
   const beat = 60 / bpm;
   let lead = 0.15;
-  if (refDo) { tone(60, a.currentTime + lead, 1.0, 0.32, bus); lead += 1.8; }
+  if (refDo) { tone(60, a.currentTime + lead, 1.0, 0.32, bus); lead += 1.0 + PIANO_TAIL; }
   const t0 = a.currentTime + lead + countIn * beat;
-  // Giriş: bir ölçü (4 vuruş) metronom, ezgi ondan sonra başlar
+  // Giriş: bir ya da iki ölçü metronom (ölçü başı vurgulu), ezgi ondan sonra başlar
   for (let i = 0; i < countIn; i++) {
-    click(t0 - (countIn - i) * beat, i === 0 ? 1600 : 1100, 0.08, bus);
+    click(t0 - (countIn - i) * beat, i % meter.beats === 0 ? 1600 : 1100, 0.08, bus);
   }
   lead += countIn * beat;
   let pos = 0; // vuruş cinsinden konum
   const notes = [];
   target.forEach((m, i) => {
     const d = durs[i] || 1;
-    // Legato: nota bir sonrakine kadar sürer (son nota biraz daha uzun çınlar)
-    const len = d * beat * (i === target.length - 1 ? 1.3 : 0.98);
+    // Legato: nota bir sonrakine biraz taşar (piyanoda pedal gibi); son nota daha uzun çınlar
+    const last = i === target.length - 1;
+    const len = last ? Math.max(d * beat * 1.3, 1.2) : d * beat + 0.08;
     tone(m, t0 + pos * beat, len, 0.32, bus);
     notes.push([m, d * beat, lead + pos * beat]);
     pos += d;
   });
   const lastD = durs[target.length - 1] || 1;
+  const lastStart = lead + (pos - lastD) * beat;
   return {
     keysAt: lead + (pos - lastD * 0.3) * beat,
-    micAt: lead + (pos + lastD * 0.3) * beat + 0.4,
+    // Mikrofon, son notanın sesi tamamen sönünce açılır (hoparlör sesi algılanmasın)
+    micAt: lastStart + Math.max(lastD * beat * 1.3, 1.2) + PIANO_TAIL,
     notes
   };
 }
@@ -423,13 +609,13 @@ function stopMelody() {
 function playMelody() {
   stopMelody();
   M.bus = newBus();
-  const countIn = $('mCount').checked ? 4 : 0;
+  const countIn = $('mCount').checked ? countInBeats(M.meter) : 0;
   M.phase = 'playing'; M.input = []; M.times = []; M.rbad = []; M.revealed = false;
   M.beat = 60 / +mBpm.value;
   renderSlots();
-  setMsg(mMsg, countIn ? '🎧 Dinle… (4 vuruş giriş)' : '🎧 Dinle…');
+  setMsg(mMsg, countIn ? `🎧 Dinle… (${countIn} vuruş giriş)` : '🎧 Dinle…');
 
-  const p = playSeq(M.target, M.durs, { bpm: +mBpm.value, countIn, bus: M.bus });
+  const p = playSeq(M.target, M.durs, { bpm: +mBpm.value, countIn, bus: M.bus, meter: M.meter });
   if ($('mShow').checked) {
     p.notes.forEach(([m, len, at]) =>
       M.timers.push(setTimeout(() => flashKey(m, Math.max(120, len * 850)), at * 1000)));
@@ -445,8 +631,13 @@ function playMelody() {
 }
 
 function newMelody() {
-  M.target = genMelody(+mLen.value, SCALES[$('mScale').value]);
-  M.durs = genDurations(M.target.length, $('mRhythm').value);
+  const tv = $('mTonic').value;
+  const tonic = tv === 'rand' ? +pick(Object.keys(TONICS)) : +tv;
+  M.key = makeKey($('mScale').value, tonic);
+  M.meter = meterOf($('mMeter').value);
+  M.target = genMelody(+mLen.value, M.key.notes);
+  M.durs = genDurations(M.target.length, $('mRhythm').value, Math.random, M.meter);
+  $('mKeyInfo').textContent = `${TONICS[M.key.tonic].label} ${SCALE_DEFS[M.key.scale].label} · ${M.meter.key}`;
   $('mReplay').disabled = false;
   playMelody();
 }
@@ -477,7 +668,7 @@ function answerNote(m, t) {
     M.revealed = true;
     renderSlots();
     setMsg(mMsg,
-      `✗ ${i + 1}. nota yanlış: ${noteName(m)} ${verb}, doğrusu ${noteName(M.target[i])}. ` +
+      `✗ ${i + 1}. nota yanlış: ${noteName(m, M.key)} ${verb}, doğrusu ${noteName(M.target[i], M.key)}. ` +
       `“Tekrar dinle / dene” ile yeniden deneyebilirsin.`, 'bad');
     updateMStats();
     return;
@@ -496,7 +687,7 @@ function answerNote(m, t) {
         M.rbad = r.items.filter(x => !x.ok).map(x => x.i);
         M.streak = 0;
         renderSlots();
-        setMsg(mMsg, `◐ Perdeler doğru, ama ritimde ${r.total - r.ok} hata var: ${rhythmText(r)}.` +
+        setMsg(mMsg, `◐ Perdeler doğru, ama ritimde ${r.total - r.ok} hata var: ${rhythmText(r, M.meter)}.` +
           tempoText(r, verb) + ' Turuncu çubuklar ritmi hatalı notaları gösterir. “Tekrar dinle / dene” ile yeniden dene.', 'bad');
         updateMStats();
         return;
@@ -770,7 +961,7 @@ $('mReplay').addEventListener('click', () => { if (M.target.length) playMelody()
 $('mRef').addEventListener('click', () => {
   tone(60, audio().currentTime, 0.9); flashKey(60, 600);
   // Sesle cevap sırasında referans sesi algılanmasın
-  V.muteUntil = audio().currentTime + 1.4;
+  V.muteUntil = audio().currentTime + 0.9 + PIANO_TAIL;
   V.cur = null; V.cand = null;
 });
 
@@ -779,6 +970,8 @@ updateMStats();
 
 /* =========================================================
    RİTİM TEKRARI
+   İki alıştırma: 🎧 dinle ve tekrar et · 📖 notadan oku ve çal.
+   Ritim, ölçüleri tam dolduran nota süreleri olarak üretilir (vuruş cinsinden).
    ========================================================= */
 const rBpm = bindRange('rBpm');
 const rLat = bindRange('rLat');
@@ -786,59 +979,87 @@ const rMsg = $('rMsg');
 const timeline = $('rTimeline');
 const head = $('rHead');
 
-// sub = vuruş başına bölme sayısı, p = bir bölmede nota olma olasılığı
-const LEVELS = { 1: { sub: 1, p: 0.6 }, 2: { sub: 2, p: 0.5 }, 3: { sub: 4, p: 0.4 } };
-
 const R = {
-  slots: [], sub: 2, bars: 1,
-  phase: 'idle', taps: [],
-  start: 0, total: 0, beat: 0.75, slotDur: 0.375,
+  durs: [], onsets: [], meter: METERS['4/4'], bars: 2, style: 'dotted', mode: 'listen',
+  phase: 'idle', taps: [], attempted: false,
+  start: 0, total: 0, totalBeats: 0, beat: 0.75, countIn: 4,
   timer: null, raf: null, bus: null,
   tries: store.get('rTries', 0), perfect: store.get('rPerfect', 0),
   streak: 0, best: store.get('rBest', 0)
 };
 
-function genRhythm() {
-  const lv = LEVELS[$('rLevel').value];
-  R.sub = lv.sub;
-  R.bars = +$('rBars').value;
-  const n = R.bars * 4 * R.sub;
-  let arr;
-  do {
-    arr = Array.from({ length: n }, (_, i) => i === 0 || Math.random() < lv.p);
-  } while (arr.filter(Boolean).length < Math.min(3, n));
-  R.slots = arr;
+const onsetsOf = durs => { let t = 0; return durs.map(d => { const o = t; t += d; return o; }); };
+
+// Zaman çizelgesindeki ızgara: vuruş başına bölme sayısı
+const gridSub = (style, mt) => style === 'mixed' ? (mt.compound ? 6 : 4) : style === 'dotted' ? (mt.compound ? 3 : 4) : (mt.compound ? 3 : 2);
+
+/* Bir ritmi çalar ya da kayda hazırlar (ortak: Ritim sekmesi ve sınav).
+   listen: davul sesiyle ritmi çalar; record: yalnızca giriş + (isteğe bağlı) metronom.
+   Dönüş: start (ritmin başladığı an, ses saati), total (sn), countIn (vuruş). */
+function playRhythmSeq({ durs, meter, bpm, bus, mode, metro = true }) {
+  const a = audio();
+  const beat = 60 / bpm;
+  const countIn = countInBeats(meter);
+  const totalBeats = durs.reduce((x, y) => x + y, 0);
+  const t0 = a.currentTime + 0.15;
+  const start = t0 + countIn * beat;
+  for (let i = 0; i < countIn; i++) click(t0 + i * beat, i % meter.beats === 0 ? 1600 : 1100, 0.12, bus);
+  if (metro) {
+    for (let b = 0; b < totalBeats - EPS; b++) click(start + b * beat, b % meter.beats === 0 ? 1600 : 1100, 0.05, bus);
+  }
+  if (mode === 'listen') onsetsOf(durs).forEach(o => drum(start + o * beat, 0.6, 320, bus));
+  return { start, total: totalBeats * beat, totalBeats, beat, countIn };
 }
+
+/* Vuruşları değerlendirir: her beklenen vuruşa tolerans içindeki en yakın dokunuş eşlenir.
+   expected, taps: saniye (ritmin başından); tol: saniye. */
+function tapScore(expected, taps, total, tol) {
+  taps = taps.filter(t => t >= -tol && t < total);   // giriş sırasındaki vuruşlar sayılmaz
+  const used = new Array(taps.length).fill(false);
+  const result = expected.map(e => {
+    let best = -1, bd = Infinity;
+    taps.forEach((t, j) => {
+      const d = Math.abs(t - e);
+      if (!used[j] && d <= tol && d < bd) { bd = d; best = j; }
+    });
+    if (best >= 0) { used[best] = true; return { e, t: taps[best], hit: true }; }
+    return { e, hit: false };
+  });
+  const extras = taps.filter((_, j) => !used[j]);
+  const hits = result.filter(r => r.hit);
+  return {
+    result, extras, hits: hits.length, misses: expected.length - hits.length,
+    acc: expected.length + extras.length ? hits.length / (expected.length + extras.length) : 0,
+    avgMs: hits.length ? hits.reduce((s, r) => s + (r.t - r.e), 0) / hits.length * 1000 : 0
+  };
+}
+// Tolerans: en kısa notanın %45'i (en az 60 ms, ama notanın %60'ından fazla değil), en çok 130 ms
+const tapTol = (durs, beat) => { const ioi = Math.min(...durs) * beat; return Math.min(0.13, Math.max(Math.min(0.06, ioi * 0.6), ioi * 0.45)); };
 
 function pct(t) { return (t / R.total) * 100; }
 
 function drawTimeline(result = null, extras = []) {
   timeline.querySelectorAll('.grid,.note,.tapmark').forEach(e => e.remove());
-  const n = R.slots.length;
-  if (!n) return;
-
+  if (!R.durs.length) return;
+  const sub = gridSub(R.style, R.meter);
+  const n = Math.round(R.totalBeats * sub);
   for (let i = 0; i < n; i++) {
     const g = document.createElement('div');
-    g.className = 'grid' + (i % R.sub === 0 ? ' beat' : '') + (i % (4 * R.sub) === 0 ? ' bar' : '');
+    g.className = 'grid' + (i % sub === 0 ? ' beat' : '') + (i % (R.meter.beats * sub) === 0 ? ' bar' : '');
     g.style.left = (i / n * 100) + '%';
     timeline.appendChild(g);
   }
-
-  const showNotes = result || $('rShow').checked;
+  const showNotes = result || (R.mode === 'listen' && $('rShow').checked);
   if (showNotes) {
-    let k = 0;
-    R.slots.forEach((on, i) => {
-      if (!on) return;
+    R.onsets.forEach((o, k) => {
       const d = document.createElement('div');
       d.className = 'note';
       if (result) d.classList.add(result[k].hit ? 'hit' : 'miss');
-      d.style.left = (i / n * 100 + 0.4) + '%';
-      d.style.width = (100 / n - 0.8) + '%';
+      d.style.left = (o / R.totalBeats * 100 + 0.3) + '%';
+      d.style.width = (R.durs[k] / R.totalBeats * 100 - 0.6) + '%';
       timeline.appendChild(d);
-      k++;
     });
   }
-
   if (result) {
     result.filter(r => r.hit).forEach(r => addTapMark(r.t, false));
     extras.forEach(t => addTapMark(t, true));
@@ -851,6 +1072,16 @@ function addTapMark(t, extra) {
   m.className = 'tapmark' + (extra ? ' extra' : '');
   m.style.left = Math.max(0, Math.min(100, pct(t))) + '%';
   timeline.appendChild(m);
+}
+
+// Ritmin notası: okuma alıştırmasında baştan, dinleme alıştırmasında denemeden sonra gösterilir
+function renderRNotation(result = null) {
+  const box = $('rNotation');
+  const show = R.durs.length && (R.mode === 'read' || R.attempted);
+  box.hidden = !show;
+  if (!show) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="staff-title">${R.mode === 'read' ? '📖 Bu ritmi oku ve çal' : 'Ritmin notası'}</div>` +
+    staffSvg(null, R.durs, R.meter, null, result ? i => ({ color: result[i].hit ? COL.ok : COL.bad }) : null);
 }
 
 function updateRStats() {
@@ -868,8 +1099,8 @@ function animate() {
   const now = audio().currentTime;
   const count = $('rCount');
   if (now < R.start) {
-    const c = Math.floor((now - (R.start - 4 * R.beat)) / R.beat) + 1;
-    count.textContent = c >= 1 && c <= 4 ? c : '';
+    const c = Math.floor((now - (R.start - R.countIn * R.beat)) / R.beat) + 1;
+    count.textContent = c >= 1 && c <= R.countIn ? c : '';
     head.style.opacity = 0;
   } else {
     count.textContent = '';
@@ -891,39 +1122,42 @@ function cancelRhythm() {
   R.phase = 'idle';
 }
 
+function newRhythm() {
+  cancelRhythm();
+  R.mode = $('rMode').value;
+  R.meter = meterOf($('rMeter').value);
+  R.style = $('rLevel').value;
+  R.bars = +$('rBars').value;
+  R.durs = genRhythmBars(R.bars, R.style, Math.random, R.meter);
+  R.onsets = onsetsOf(R.durs);
+  R.totalBeats = R.durs.reduce((a, b) => a + b, 0);
+  R.total = R.totalBeats * (60 / +rBpm.value);
+  R.attempted = false;
+  $('rGo').disabled = false;
+  $('rReplay').disabled = R.mode === 'read';   // okumada önce öğrenci çalar, sonra dinleyebilir
+  drawTimeline();
+  renderRNotation();
+  if (R.mode === 'listen') runRhythm('listen');
+  else setMsg(rMsg, `📖 Notayı oku. Hazır olunca “Sıra bende”ye bas (veya Enter): ${countInBeats(R.meter)} vuruş girişten sonra çal.`, 'info');
+}
+
 // mode: 'listen' (ritmi çal) | 'record' (kullanıcıyı kaydet)
 function runRhythm(mode) {
-  if (!R.slots.length) return;
+  if (!R.durs.length) return;
   cancelRhythm();
-  const a = audio();
   R.bus = newBus();
-  R.beat = 60 / +rBpm.value;
-  R.slotDur = R.beat / R.sub;
-  const nBeats = R.bars * 4;
-  const t0 = a.currentTime + 0.15;
-  R.start = t0 + 4 * R.beat;
-  R.total = nBeats * R.beat;
-
-  // 4 vuruşluk giriş
-  for (let i = 0; i < 4; i++) click(t0 + i * R.beat, i === 0 ? 1600 : 1100, 0.12, R.bus);
-  // Metronom
-  if ($('rMetro').checked) {
-    for (let b = 0; b < nBeats; b++) click(R.start + b * R.beat, b % 4 === 0 ? 1600 : 1100, 0.05, R.bus);
-  }
-  // Ritim
-  if (mode === 'listen') {
-    R.slots.forEach((on, i) => { if (on) drum(R.start + i * R.slotDur, 0.6, 320, R.bus); });
-  }
+  const p = playRhythmSeq({ durs: R.durs, meter: R.meter, bpm: +rBpm.value, bus: R.bus, mode, metro: $('rMetro').checked });
+  Object.assign(R, { start: p.start, total: p.total, beat: p.beat, countIn: p.countIn });
 
   R.taps = [];
   R.phase = mode === 'listen' ? 'playing' : 'recording';
   drawTimeline();
   setMsg(rMsg, mode === 'listen'
-    ? '🎧 Dinle… (4 vuruş giriş)'
-    : '⏳ Hazırlan… 4 vuruştan sonra çal! (Boşluk veya DOKUN)', mode === 'record' ? 'info' : '');
+    ? `🎧 Dinle… (${p.countIn} vuruş giriş)`
+    : `⏳ Hazırlan… ${p.countIn} vuruştan sonra çal! (Boşluk veya DOKUN)`, mode === 'record' ? 'info' : '');
   animate();
 
-  const endIn = (R.start + R.total + R.beat * 0.6 - a.currentTime) * 1000;
+  const endIn = (R.start + R.total + R.beat * 0.6 - audio().currentTime) * 1000;
   R.timer = setTimeout(() => {
     stopAnim();
     if (mode === 'record') evaluate();
@@ -937,77 +1171,59 @@ function runRhythm(mode) {
 function tap() {
   const a = audio();
   drum(a.currentTime, 0.3, 520);
-  const pad = $('tapPad');
+  const pad = activeTab === 'exam' ? $('exTap') : $('tapPad');
   pad.classList.add('hit');
   setTimeout(() => pad.classList.remove('hit'), 90);
-
-  if (R.phase !== 'recording') return;
   // Ses çıkış gecikmesi + kullanıcı ayarı kadar düzelt
-  const lat = (a.outputLatency || 0) + (+rLat.value) / 1000;
-  const t = a.currentTime - R.start - lat;
-  R.taps.push(t);
-  if (t >= 0) addTapMark(t, false);
+  const t = a.currentTime - (a.outputLatency || 0) - (+rLat.value) / 1000;
+  if (activeTab === 'exam') { examTap(t); return; }
+  if (R.phase !== 'recording') return;
+  R.taps.push(t - R.start);
+  if (t - R.start >= 0) addTapMark(t - R.start, false);
 }
 
 function evaluate() {
   R.phase = 'idle';
-  const tol = Math.min(0.13, R.slotDur * 0.45); // tolerans (saniye)
-  const expected = [];
-  R.slots.forEach((on, i) => { if (on) expected.push(i * R.slotDur); });
-
-  // Giriş sırasında yapılan vuruşları yok say
-  const taps = R.taps.filter(t => t >= -tol && t < R.total);
-  const used = new Array(taps.length).fill(false);
-
-  const result = expected.map(e => {
-    let best = -1, bd = Infinity;
-    taps.forEach((t, j) => {
-      const d = Math.abs(t - e);
-      if (!used[j] && d <= tol && d < bd) { bd = d; best = j; }
-    });
-    if (best >= 0) { used[best] = true; return { e, t: taps[best], hit: true }; }
-    return { e, hit: false };
-  });
-  const extras = taps.filter((_, j) => !used[j]);
-  const hits = result.filter(r => r.hit);
-  const misses = expected.length - hits.length;
-  const acc = Math.round(100 * hits.length / (expected.length + extras.length));
-  const avgMs = hits.length ? hits.reduce((s, r) => s + (r.t - r.e), 0) / hits.length * 1000 : 0;
-
-  drawTimeline(result, extras);
+  R.attempted = true;
+  const sc = tapScore(R.onsets.map(o => o * R.beat), R.taps, R.total, tapTol(R.durs, R.beat));
+  drawTimeline(sc.result, sc.extras);
+  renderRNotation(sc.result);
+  $('rReplay').disabled = false;
 
   R.tries++;
-  const perfect = misses === 0 && extras.length === 0;
+  const perfect = sc.misses === 0 && sc.extras.length === 0;
   if (perfect) { R.perfect++; R.streak++; R.best = Math.max(R.best, R.streak); }
   else R.streak = 0;
   updateRStats();
 
+  const acc = Math.round(100 * sc.acc);
   let tendency = '';
-  if (hits.length && Math.abs(avgMs) > 25) {
-    tendency = ` Ortalama ${Math.abs(Math.round(avgMs))} ms ${avgMs < 0 ? 'erken' : 'geç'} vuruyorsun.`;
+  if (sc.hits && Math.abs(sc.avgMs) > 25) {
+    tendency = ` Ortalama ${Math.abs(Math.round(sc.avgMs))} ms ${sc.avgMs < 0 ? 'erken' : 'geç'} vuruyorsun.`;
   }
-
+  const again = R.mode === 'read' ? '“Dinle” ile doğrusunu duyabilir, yeniden deneyebilirsin.' : 'Tekrar dinleyip yeniden dene.';
   if (!R.taps.length) {
     setMsg(rMsg, 'Hiç vuruş algılanmadı. Boşluk tuşuna ya da DOKUN düğmesine bas.', 'bad');
   } else if (perfect) {
     setMsg(rMsg, `✓ Kusursuz! %${acc} doğruluk.${tendency} Devam için “Yeni ritim”.`, 'good');
   } else {
     const parts = [];
-    if (misses) parts.push(`${misses} vuruş kaçtı`);
-    if (extras.length) parts.push(`${extras.length} fazla vuruş`);
-    setMsg(rMsg, `%${acc} doğruluk — ${parts.join(', ')}.${tendency} Tekrar dinleyip yeniden dene.`, 'bad');
+    if (sc.misses) parts.push(`${sc.misses} vuruş kaçtı`);
+    if (sc.extras.length) parts.push(`${sc.extras.length} fazla vuruş`);
+    setMsg(rMsg, `%${acc} doğruluk — ${parts.join(', ')}.${tendency} ${again}`, 'bad');
   }
 }
 
-$('rNew').addEventListener('click', () => {
-  genRhythm();
-  $('rReplay').disabled = false;
-  $('rGo').disabled = false;
-  runRhythm('listen');
-});
+$('rNew').addEventListener('click', newRhythm);
 $('rReplay').addEventListener('click', () => runRhythm('listen'));
 $('rGo').addEventListener('click', () => runRhythm('record'));
 $('rShow').addEventListener('change', () => { if (R.phase === 'idle') drawTimeline(); });
+$('rMode').addEventListener('change', () => {
+  $('rShow').parentElement.hidden = $('rMode').value === 'read';
+  setMsg(rMsg, $('rMode').value === 'read'
+    ? '“Yeni ritim”e bas: ritim nota olarak gösterilir, sen okuyup çalarsın.'
+    : '“Yeni ritim”e bas. Girişten sonra ritim çalar.');
+});
 $('tapPad').addEventListener('pointerdown', e => { e.preventDefault(); tap(); });
 
 updateRStats();
@@ -1016,17 +1232,20 @@ updateRStats();
    SINAV
    - Öğretmen ayarları seçer, bir sınav kodu belirler ve öğrenci bağlantısı oluşturur.
    - Aynı kod + aynı ayarlar → herkes aynı soruları alır (tohumlu rastgele üreteç).
+   - Soru türleri: 🎵 ezgi, 🎧 ritim (dinleme), 📖 ritim (okuma); seçilenler sırayla gelir.
    - Sınav sırasında doğru/yanlış gösterilmez; dinleme hakkı sınırlıdır.
-   - Puan: her soruda (nota sayısı − düzeltme uzaklığı) / nota sayısı.
+   - Öğretmen şifresi oluşturulursa ayarlar ve sonuçlar yalnızca girişle görülür.
    ========================================================= */
 const CANON_URL = 'https://gryflute-ui.github.io/ezgi-ritim/';
 const exMsg = $('exMsg');
 const examMicUI = { live: $('exMic'), note: $('exMicNote'), level: $('exMicLevel') };
+const KIND = { m: '🎵 Ezgi', rd: '🎧 Ritim (dinleme)', rr: '📖 Ritim (okuma)' };
+const isRhythm = it => it.type === 'rd' || it.type === 'rr';
 
 const E = {
   cfg: null, items: [], i: 0,
-  state: 'idle',   // idle | ready | playing | answering | answered
-  listens: 0, answer: [], timers: [], bus: null,
+  state: 'idle',   // idle | ready | playing | listened | answering | recording | answered
+  listens: 0, answer: [], times: [], taps: [], rec: null, raf: null, timers: [], bus: null,
   student: null, locked: false
 };
 
@@ -1060,27 +1279,36 @@ function readCfg() {
   if (nmax < nmin) [nmin, nmax] = [nmax, nmin];
   let code = $('exCode').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!code) code = randomCode();
+  const types = [['m', 'exTypeM'], ['rd', 'exTypeRD'], ['rr', 'exTypeRR']].filter(([, id]) => $(id).checked).map(([t]) => t);
+  const tv = $('exTonic').value;
   const c = {
     code,
+    types: types.length ? types : ['m'],
     q: clampInt($('exQ').value, 1, 40, 10),
     nmin, nmax,
-    scale: SCALES[$('exScale').value] ? $('exScale').value : 'major',
+    scale: SCALE_DEFS[$('exScale').value] ? $('exScale').value : 'major',
+    tonic: tv === 'rand' || TONICS[tv] ? tv : '60',
+    meter: METERS[$('exMeter').value] ? $('exMeter').value : '4/4',
     rhythm: RCELLS[$('exRhythm').value] ? $('exRhythm').value : 'simple',
+    bars: clampInt($('exBars').value, 1, 2, 2),
     bpm: clampInt($('exBpm').value, 50, 160, 80),
     listens: clampInt($('exListens').value, 1, 3, 2),
     answer: $('exAnswer').value === 'keys' ? 'keys' : 'voice',
     refDo: $('exDo').checked,
     countIn: $('exCount').checked,
-    rw: [0, 30, 50].includes(+$('exRW').value) ? +$('exRW').value : 30  // ritmin puandaki payı (%)
+    rw: [0, 30, 50].includes(+$('exRW').value) ? +$('exRW').value : 30  // ezgide ritmin puandaki payı (%)
   };
   writeCfg(c); // düzeltilmiş değerleri forma geri yaz
   return c;
 }
 
 function writeCfg(c) {
+  const types = Array.isArray(c.types) ? c.types : String(c.types || 'm').split('.');
+  $('exTypeM').checked = types.includes('m'); $('exTypeRD').checked = types.includes('rd'); $('exTypeRR').checked = types.includes('rr');
   $('exCode').value = c.code; $('exQ').value = c.q;
   $('exNmin').value = c.nmin; $('exNmax').value = c.nmax;
-  $('exScale').value = c.scale; $('exRhythm').value = c.rhythm;
+  $('exScale').value = c.scale; $('exTonic').value = c.tonic; $('exMeter').value = c.meter;
+  $('exRhythm').value = c.rhythm; $('exBars').value = c.bars;
   $('exBpm').value = c.bpm; $('exListens').value = c.listens;
   $('exAnswer').value = c.answer;
   $('exDo').checked = c.refDo; $('exCount').checked = c.countIn;
@@ -1088,12 +1316,16 @@ function writeCfg(c) {
 }
 
 // Bağlantıdaki adlar (Türkçe, kısa)
-const QKEYS = { code: 'kod', q: 'soru', nmin: 'enaz', nmax: 'encok', scale: 'dizi', rhythm: 'ritim',
-                bpm: 'tempo', listens: 'hak', answer: 'cevap', refDo: 'do', countIn: 'giris', rw: 'ritimpuan' };
+const QKEYS = { code: 'kod', types: 'tur', q: 'soru', nmin: 'enaz', nmax: 'encok', scale: 'dizi', tonic: 'ton',
+                meter: 'olcu', rhythm: 'ritim', bars: 'rolcu', bpm: 'tempo', listens: 'hak', answer: 'cevap',
+                refDo: 'do', countIn: 'giris', rw: 'ritimpuan' };
 
 function cfgToQuery(c) {
   const p = new URLSearchParams({ sinav: '1' });
-  for (const [k, q] of Object.entries(QKEYS)) p.set(q, typeof c[k] === 'boolean' ? (c[k] ? '1' : '0') : c[k]);
+  for (const [k, q] of Object.entries(QKEYS)) {
+    const v = c[k];
+    p.set(q, typeof v === 'boolean' ? (v ? '1' : '0') : Array.isArray(v) ? v.join('.') : v);
+  }
   return p.toString();
 }
 
@@ -1102,8 +1334,9 @@ function cfgFromQuery(search = location.search) {
   if (!p.has('sinav')) return null;
   const g = (k, d) => p.has(QKEYS[k]) ? p.get(QKEYS[k]) : d;
   return {
-    code: g('code', ''), q: g('q', 10), nmin: g('nmin', 3), nmax: g('nmax', 6),
-    scale: g('scale', 'major'), rhythm: g('rhythm', 'simple'), bpm: g('bpm', 80),
+    code: g('code', ''), types: g('types', 'm').split('.'), q: g('q', 10), nmin: g('nmin', 3), nmax: g('nmax', 6),
+    scale: g('scale', 'major'), tonic: g('tonic', '60'), meter: g('meter', '4/4'),
+    rhythm: g('rhythm', 'simple'), bars: g('bars', 2), bpm: g('bpm', 80),
     listens: g('listens', 2), answer: g('answer', 'voice'),
     refDo: g('refDo', '1') === '1', countIn: g('countIn', '1') === '1',
     rw: g('rw', '0')   // ritim puanı eklenmeden önce oluşturulan bağlantılarda ritim puanlanmaz
@@ -1112,12 +1345,23 @@ function cfgFromQuery(search = location.search) {
 
 function buildItems(c) {
   // Sorular yalnızca bu ayarlara bağlıdır (tempo ve dinleme hakkı soruları değiştirmez)
-  const rng = mulberry32(hashStr(JSON.stringify([c.code, c.q, c.nmin, c.nmax, c.scale, c.rhythm])));
-  return Array.from({ length: c.q }, (_, i) => {
-    // Nota sayısı sorular boyunca en azdan en çoğa doğru artar
-    const n = Math.round(c.nmin + (c.nmax - c.nmin) * (c.q > 1 ? i / (c.q - 1) : 0));
-    const target = genMelody(n, SCALES[c.scale], rng);
-    return { target, durs: genDurations(n, c.rhythm, rng), answer: [] };
+  const rng = mulberry32(hashStr(JSON.stringify([c.code, c.q, c.nmin, c.nmax, c.scale, c.rhythm,
+    c.tonic, c.meter, c.types, c.bars])));
+  const meter = meterOf(c.meter);
+  const kinds = Array.from({ length: c.q }, (_, i) => c.types[i % c.types.length]);
+  const nMel = kinds.filter(k => k === 'm').length;
+  let mi = 0;
+  return kinds.map(type => {
+    if (type !== 'm') {
+      return { type, durs: genRhythmBars(c.bars, c.rhythm, rng, meter), taps: [] };
+    }
+    // Nota sayısı ezgi soruları boyunca en azdan en çoğa doğru artar
+    const n = Math.round(c.nmin + (c.nmax - c.nmin) * (nMel > 1 ? mi / (nMel - 1) : 0));
+    mi++;
+    const tonic = c.tonic === 'rand' ? +pick(Object.keys(TONICS), rng) : +c.tonic;
+    const key = makeKey(c.scale, tonic);
+    const target = genMelody(n, key.notes, rng);
+    return { type, key, target, durs: genDurations(n, c.rhythm, rng, meter), answer: [], times: [] };
   });
 }
 
@@ -1147,10 +1391,17 @@ function align(t, a) {
 // Perde puanı (0–1)
 const itemScore = it => Math.max(0, it.target.length - align(it.target, it.answer).dist) / it.target.length;
 
-// Bir sorunun bütün puanları: perde, ritim ve ağırlıklı toplam (0–1)
+// Bir sorunun puanları (0–1). Ezgi: perde, ritim, ağırlıklı toplam. Ritim sorusu: vuruş doğruluğu.
 function scoreItem(it, cfg) {
+  const beat = 60 / cfg.bpm;
+  if (isRhythm(it)) {
+    const ons = onsetsOf(it.durs).map(o => o * beat);
+    const total = it.durs.reduce((a, b) => a + b, 0) * beat;
+    const sc = tapScore(ons, it.taps || [], total, tapTol(it.durs, beat));
+    return { s: sc.acc, sr: sc.acc, hit: sc.result.map(r => r.hit), extra: sc.extras.length, hits: sc.hits };
+  }
   const sp = itemScore(it);
-  const r = rhythmEval(it.target, it.durs, it.answer, it.times, 60 / cfg.bpm);
+  const r = rhythmEval(it.target, it.durs, it.answer, it.times, beat);
   const w = (cfg.rw || 0) / 100;
   return {
     sp, sr: r.score, s: w ? (1 - w) * sp + w * r.score : sp,
@@ -1170,6 +1421,7 @@ const exItem = () => E.items[E.i];
 function renderExSlots() {
   const box = $('exSlots');
   box.innerHTML = '';
+  if (isRhythm(exItem())) return;
   exItem().target.forEach((_, i) => {
     const d = document.createElement('div');
     d.className = 'slot' + (i < E.answer.length ? ' filled' : '');
@@ -1181,11 +1433,13 @@ function renderExSlots() {
 function setPlayBtn() {
   const b = $('exPlay');
   b.textContent = E.listens > 0 ? `▶ Dinle (${E.listens} hak kaldı)` : 'Dinleme hakkın bitti';
-  b.disabled = E.listens <= 0 || E.state === 'playing';
+  b.disabled = E.listens <= 0 || E.state === 'playing' || E.state === 'recording';
 }
 
 function stopExamAudio() {
   E.timers.forEach(clearTimeout); E.timers = [];
+  cancelAnimationFrame(E.raf); E.raf = null;
+  $('exCount').textContent = '';
   killBus(E.bus); E.bus = null;
   stopListening();
 }
@@ -1195,12 +1449,14 @@ async function startExam() {
   if (!name) { setMsg($('exSetupMsg'), 'Lütfen adını ve soyadını yaz.', 'bad'); $('exName').focus(); return; }
   E.cfg = readCfg();
   stopMelody(); cancelRhythm();
+  const hasMelody = E.cfg.types.includes('m');
 
-  if (E.cfg.answer === 'voice' && !(await openMic())) {
+  if (hasMelody && E.cfg.answer === 'voice' && !(await openMic())) {
     setMsg($('exSetupMsg'), '🎤 Mikrofona erişilemedi. Tarayıcıda mikrofon izni verip tekrar dene.', 'bad');
     return;
   }
   setMsg($('exSetupMsg'), '');
+  adminLogout(); // öğretmen oturumu sınavla birlikte kapanır
   E.student = { name, no: $('exNo').value.trim() };
   E.items = buildItems(E.cfg);
   E.i = 0;
@@ -1208,7 +1464,6 @@ async function startExam() {
   // Sınav süresince diğer sekmeler kapalı; sayfadan çıkarken uyarı
   document.querySelectorAll('.tab').forEach(b => { b.disabled = b.dataset.tab !== 'exam'; });
   window.onbeforeunload = e => { e.preventDefault(); return ''; };
-  if (E.cfg.answer === 'keys') $('exPianoHost').appendChild(pianoBox);
 
   $('exSetup').hidden = true; $('exResult').hidden = true; $('exRun').hidden = false;
   $('exWho').textContent = name + (E.student.no ? ` (${E.student.no})` : '');
@@ -1218,28 +1473,65 @@ async function startExam() {
 
 function showQuestion() {
   stopExamAudio();
-  E.listens = E.cfg.listens; E.answer = []; E.times = []; E.state = 'ready';
+  const it = exItem();
+  const rhythm = isRhythm(it);
+  E.listens = E.cfg.listens; E.answer = []; E.times = []; E.taps = []; E.state = 'ready';
   $('exNum').textContent = E.i + 1;
+  $('exKind').textContent = KIND[it.type];
   $('exProg').style.width = (E.i / E.items.length * 100) + '%';
   $('exRedo').disabled = true;
   $('exNext').disabled = true;
   $('exNext').textContent = E.i === E.items.length - 1 ? 'Sınavı bitir ✓' : 'Sonraki soru →';
+  $('exPlay').hidden = it.type === 'rr';
+  $('exGo').hidden = !rhythm;
+  $('exGo').disabled = it.type !== 'rr';
+  $('exRhythmBox').hidden = !rhythm;
+  $('exSlots').hidden = rhythm;
+  // Piyano yalnız piyanoyla cevaplanan ezgi sorularında görünür
+  if (!rhythm && E.cfg.answer === 'keys') $('exPianoHost').appendChild(pianoBox);
+  else restorePiano();
+  const mt = meterOf(E.cfg.meter);
+  $('exNotation').innerHTML = it.type === 'rr' ? staffSvg(null, it.durs, mt) : '';
+  $('exNotation').hidden = it.type !== 'rr';
   setPlayBtn();
   renderExSlots();
-  setMsg(exMsg, `Hazır olunca “Dinle”ye bas. ${exItem().target.length} notalık bir ezgi; ` +
-    `${E.cfg.listens} kez dinleyebilirsin.` + (E.cfg.refDo ? ' Ezgiden önce Do sesi verilir.' : ''));
+  const cin = countInBeats(mt);
+  if (it.type === 'm') {
+    setMsg(exMsg, `Hazır olunca “Dinle”ye bas. ${it.target.length} notalık bir ezgi; ` +
+      `${E.cfg.listens} kez dinleyebilirsin.` + (E.cfg.refDo ? ' Ezgiden önce Do sesi verilir.' : ''));
+  } else if (it.type === 'rd') {
+    setMsg(exMsg, `Hazır olunca “Dinle”ye bas; ritmi ${E.cfg.listens} kez dinleyebilirsin. ` +
+      `Sonra “Çalmaya başla”ya bas (Enter): ${cin} vuruş girişten sonra Boşluk tuşuyla ya da DOKUN düğmesiyle çal.`);
+  } else {
+    setMsg(exMsg, `📖 Ritmi notadan oku. Hazır olunca “Çalmaya başla”ya bas (Enter): ` +
+      `${cin} vuruş girişten sonra Boşluk tuşuyla ya da DOKUN düğmesiyle çal.`);
+  }
 }
 
 function examPlay() {
-  if (E.listens <= 0 || E.state === 'playing') return;
-  stopExamAudio();
-  E.listens--; E.answer = []; E.times = []; E.state = 'playing';
-  setPlayBtn(); renderExSlots();
-  $('exRedo').disabled = true; $('exNext').disabled = true;
-  setMsg(exMsg, E.cfg.refDo ? '🎧 Önce Do sesi, sonra ezgi… Dinle.' : '🎧 Dinle…');
-  E.bus = newBus();
+  if (E.listens <= 0 || E.state === 'playing' || E.state === 'recording') return;
   const it = exItem();
-  const p = playSeq(it.target, it.durs, { bpm: E.cfg.bpm, countIn: E.cfg.countIn ? 4 : 0, refDo: E.cfg.refDo, bus: E.bus });
+  if (it.type === 'rr') return;
+  stopExamAudio();
+  E.listens--; E.answer = []; E.times = []; E.taps = []; E.state = 'playing';
+  setPlayBtn(); renderExSlots();
+  $('exRedo').disabled = true; $('exNext').disabled = true; $('exGo').disabled = true;
+  E.bus = newBus();
+  const mt = meterOf(E.cfg.meter);
+  if (it.type === 'rd') {
+    setMsg(exMsg, '🎧 Dinle…');
+    const p = playRhythmSeq({ durs: it.durs, meter: mt, bpm: E.cfg.bpm, bus: E.bus, mode: 'listen' });
+    E.timers.push(setTimeout(() => {
+      E.state = 'listened';
+      setPlayBtn();
+      $('exGo').disabled = false;
+      setMsg(exMsg, 'Hazır olunca “Çalmaya başla”ya bas (Enter).', 'info');
+    }, (p.start - audio().currentTime + p.total + p.beat * 0.3) * 1000));
+    return;
+  }
+  setMsg(exMsg, E.cfg.refDo ? '🎧 Önce Do sesi, sonra ezgi… Dinle.' : '🎧 Dinle…');
+  const p = playSeq(it.target, it.durs, { bpm: E.cfg.bpm, countIn: E.cfg.countIn ? countInBeats(mt) : 0,
+    refDo: E.cfg.refDo, bus: E.bus, meter: mt });
   E.timers.push(setTimeout(beginAnswer, (E.cfg.answer === 'voice' ? p.micAt : p.keysAt) * 1000));
 }
 
@@ -1270,26 +1562,62 @@ function examNote(m, t) {
   if (E.answer.length >= exItem().target.length) finishAnswer('✓ Cevabın kaydedildi.');
 }
 
-function finishAnswer(text) {
+function finishAnswer(text, good) {
   stopListening();
   E.state = 'answered';
   setPlayBtn();
   $('exRedo').disabled = false;
   $('exNext').disabled = false;
+  if (isRhythm(exItem())) $('exGo').disabled = true;
   const last = E.i === E.items.length - 1;
-  setMsg(exMsg, `${text} ${last ? '“Sınavı bitir”e bas.' : '“Sonraki soru”ya geç.'}`, E.answer.length ? 'good' : 'bad');
+  const ok = good ?? E.answer.length > 0;
+  setMsg(exMsg, `${text} ${last ? '“Sınavı bitir”e bas.' : '“Sonraki soru”ya geç.'}`, ok ? 'good' : 'bad');
+}
+
+/* --- Ritim sorusu: vuruşları kaydet --- */
+function examGo() {
+  const it = exItem();
+  if (!isRhythm(it) || $('exGo').disabled || E.state === 'playing' || E.state === 'recording') return;
+  stopExamAudio();
+  E.taps = [];
+  E.state = 'recording';
+  setPlayBtn();
+  $('exGo').disabled = true; $('exRedo').disabled = true; $('exNext').disabled = true;
+  E.bus = newBus();
+  const p = playRhythmSeq({ durs: it.durs, meter: meterOf(E.cfg.meter), bpm: E.cfg.bpm, bus: E.bus, mode: 'record' });
+  E.rec = p;
+  setMsg(exMsg, `⏳ Hazırlan… ${p.countIn} vuruştan sonra çal! (Boşluk veya DOKUN)`, 'info');
+  const tick = () => {
+    const now = audio().currentTime, cnt = $('exCount');
+    if (now < p.start) {
+      const c = Math.floor((now - (p.start - p.countIn * p.beat)) / p.beat) + 1;
+      cnt.textContent = c >= 1 && c <= p.countIn ? c : '';
+    } else cnt.textContent = '🥁';
+    E.raf = requestAnimationFrame(tick);
+  };
+  tick();
+  E.timers.push(setTimeout(() => {
+    cancelAnimationFrame(E.raf); $('exCount').textContent = '';
+    finishAnswer(E.taps.length ? `✓ Vuruşların kaydedildi (${E.taps.length} vuruş).`
+      : 'Hiç vuruş algılanmadı. “Cevabı sil, yeniden cevapla” ile yeniden çalabilirsin.', E.taps.length > 0);
+  }, (p.start - audio().currentTime + p.total + p.beat * 0.6) * 1000));
+}
+function examTap(t) {
+  if (E.state !== 'recording' || !E.rec) return;
+  E.taps.push(t - E.rec.start);
 }
 
 function examRedo() {
   if (E.state !== 'answering' && E.state !== 'answered') return;
   stopListening();
-  E.answer = []; E.times = [];
+  E.answer = []; E.times = []; E.taps = [];
   renderExSlots();
+  if (isRhythm(exItem())) { $('exGo').disabled = false; examGo(); return; }
   beginAnswer();
 }
 
 function examKey(m) {
-  if (E.state === 'idle' || E.state === 'playing') return;
+  if (E.state === 'idle' || E.state === 'playing' || isRhythm(exItem())) return;
   // Sesle cevapta piyano susar (mikrofon onu da duyardı)
   if (E.cfg.answer === 'voice' && E.state === 'answering') return;
   tone(m, audio().currentTime);
@@ -1298,13 +1626,20 @@ function examKey(m) {
 }
 
 function examNext() {
-  if (E.state === 'playing' || E.state === 'ready') return;
-  const n = exItem().target.length;
-  if (E.answer.length < n &&
-      !confirm(`Bu soruda ${n} notadan ${E.answer.length} tanesini cevapladın. Yine de geçmek istiyor musun?`)) return;
+  if (E.state === 'playing' || E.state === 'recording') return;
+  const it = exItem();
+  if (isRhythm(it)) {
+    if (E.state !== 'answered' && !confirm('Bu ritim sorusunu cevaplamadın. Yine de geçmek istiyor musun?')) return;
+    it.taps = E.taps.slice();
+  } else {
+    if (E.state === 'ready') return;
+    const n = it.target.length;
+    if (E.answer.length < n &&
+        !confirm(`Bu soruda ${n} notadan ${E.answer.length} tanesini cevapladın. Yine de geçmek istiyor musun?`)) return;
+    it.answer = E.answer.slice();
+    it.times = E.times.slice();
+  }
   stopExamAudio();
-  exItem().answer = E.answer.slice();
-  exItem().times = E.times.slice();
   E.i++;
   if (E.i >= E.items.length) finishExam();
   else showQuestion();
@@ -1319,17 +1654,23 @@ function finishExam() {
   window.onbeforeunload = null;
 
   const sc = E.items.map(it => scoreItem(it, E.cfg));
-  const avg = k => Math.round(100 * sc.reduce((a, x) => a + x[k], 0) / sc.length);
+  const mean = arr => arr.length ? Math.round(100 * arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+  const mel = E.items.map((it, i) => [it, sc[i]]).filter(([it]) => !isRhythm(it));
+  const rhy = E.items.map((it, i) => [it, sc[i]]).filter(([it]) => isRhythm(it));
   const rec = {
     name: E.student.name, no: E.student.no,
     date: new Date().toISOString(),
     code: E.cfg.code, cfg: E.cfg,
-    score: avg('s'), pitch: avg('sp'), rhythm: avg('sr'),
-    items: E.items.map((it, i) => ({
-      t: it.target, d: it.durs, a: it.answer,
-      o: (it.times || []).map(x => Math.round((x - it.times[0]) * 1000)), // başlama anları (ms)
-      s: sc[i].s, sp: sc[i].sp, sr: sc[i].sr, rb: sc[i].rbad
-    }))
+    score: mean(sc.map(x => x.s)),
+    pitch: mean(mel.map(([, x]) => x.sp)),
+    rhythm: mean([...(E.cfg.rw ? mel.map(([, x]) => x.sr) : []), ...rhy.map(([, x]) => x.s)]),
+    items: E.items.map((it, i) => isRhythm(it)
+      ? { type: it.type, d: it.durs, s: sc[i].s, sr: sc[i].sr, h: sc[i].hit, x: sc[i].extra, n: (it.taps || []).length }
+      : {
+          type: 'm', k: it.key, t: it.target, d: it.durs, a: it.answer,
+          o: (it.times || []).map(x => Math.round((x - it.times[0]) * 1000)), // başlama anları (ms)
+          s: sc[i].s, sp: sc[i].sp, sr: sc[i].sr, rb: sc[i].rbad
+        })
   };
   const all = store.get('exams', []);
   all.push(rec);
@@ -1342,35 +1683,76 @@ let shownRec = null;
 function showResult(rec) {
   shownRec = rec;
   $('exSetup').hidden = true; $('exRun').hidden = true; $('exResult').hidden = false;
+  const cfg = rec.cfg, rw = cfg.rw || 0, mt = meterOf(cfg.meter);
+  const kinds = [...new Set(rec.items.map(it => it.type || 'm'))].map(k => KIND[k]).join(', ');
   $('exRName').textContent = rec.name + (rec.no ? ` (${rec.no})` : '');
-  const rw = rec.cfg.rw || 0;
   $('exRMeta').textContent = `${new Date(rec.date).toLocaleString('tr-TR')} · Sınav kodu ${rec.code} · ` +
-    `${rec.items.length} soru · ${rec.cfg.answer === 'voice' ? 'sesle cevap' : 'piyanoyla cevap'}` +
-    (rw ? ` · Perde ${rec.pitch} · Ritim ${rec.rhythm} (puanın %${rw}${rw === 50 ? "'si" : "'u"} ritim)` : ' · Ritim puanlanmadı');
+    `${rec.items.length} soru (${kinds})` +
+    (rec.pitch !== null && rec.pitch !== undefined ? ` · Perde ${rec.pitch}` : '') +
+    (rec.rhythm !== null && rec.rhythm !== undefined ? ` · Ritim ${rec.rhythm}` : '') +
+    (rec.items.some(it => !it.type || it.type === 'm') ? (rw ? ` · ezgide puanın %${rw}${rw === 50 ? "'si" : "'u"} ritim` : ' · ezgide ritim puanlanmadı') : '');
   $('exRScore').textContent = rec.score;
 
-  const pct = v => v === undefined ? '—' : Math.round(v * 100) + '%';
+  const pct = v => v === undefined || v === null ? '—' : Math.round(v * 100) + '%';
   const body = $('exRBody');
   body.innerHTML = '';
   rec.items.forEach((it, i) => {
+    const type = it.type || 'm';
     const tr = document.createElement('tr');
     const td = txt => { const c = document.createElement('td'); if (txt !== undefined) c.textContent = txt; tr.appendChild(c); return c; };
-    td(i + 1);
-    td(it.t.map(noteName).join(' '));
-    const ans = td();
-    if (!it.a.length) ans.textContent = '—';
-    else align(it.t, it.a).ops.forEach(o => {
-      const s = document.createElement(o.op === 'skip' ? 's' : 'span');
-      const rb = rw && o.aj !== undefined && (it.rb || []).includes(o.aj);
-      s.className = 'rn ' + o.op + (rb ? ' rbad' : '');
-      s.textContent = noteName(o.op === 'skip' ? o.t : o.a);
-      if (rb) s.title = 'Bu notanın süresi (ritmi) hatalı';
-      ans.appendChild(s);
-    });
-    td(pct(it.sp ?? it.s));
-    td(rw ? pct(it.sr) : '—');
+    const first = td(i + 1);
+    const btn = document.createElement('button');
+    btn.className = 'small no-print staff-btn'; btn.textContent = '♪ nota'; btn.title = 'Sorunun notasını göster';
+    first.appendChild(btn);
+
+    if (type === 'm') {
+      td(it.t.map(m => noteName(m, it.k)).join(' '));
+      const ans = td();
+      if (!it.a.length) ans.textContent = '—';
+      else align(it.t, it.a).ops.forEach(o => {
+        const s = document.createElement(o.op === 'skip' ? 's' : 'span');
+        const rb = rw && o.aj !== undefined && (it.rb || []).includes(o.aj);
+        s.className = 'rn ' + o.op + (rb ? ' rbad' : '');
+        s.textContent = noteName(o.op === 'skip' ? o.t : o.a, it.k);
+        if (rb) s.title = 'Bu notanın süresi (ritmi) hatalı';
+        ans.appendChild(s);
+      });
+      td(pct(it.sp ?? it.s));
+      td(rw ? pct(it.sr) : '—');
+    } else {
+      td(`${KIND[type]} · ${mt.key} · ${it.d.length} nota`);
+      const hits = (it.h || []).filter(Boolean).length;
+      td(it.n ? `${hits}/${it.d.length} vuruş yakalandı` + (it.x ? `, ${it.x} fazla` : '') : '— (çalınmadı)');
+      td('—');
+      td(pct(it.sr));
+    }
     td(pct(it.s));
     body.appendChild(tr);
+
+    // Açılır porte satırı
+    const detail = document.createElement('tr');
+    detail.className = 'staff-row'; detail.hidden = true;
+    const cell = document.createElement('td'); cell.colSpan = 6;
+    detail.appendChild(cell);
+    body.appendChild(detail);
+    btn.addEventListener('click', () => {
+      if (!cell.innerHTML) {
+        if (type === 'm') {
+          const ops = align(it.t, it.a).ops;
+          const col = {};
+          ops.forEach(o => {
+            if (o.ti === undefined) return;
+            if (o.op === 'skip') col[o.ti] = { color: COL.muted };
+            else if (o.op === 'bad') { const s = spell(o.a, it.k); col[o.ti] = { color: COL.warn, ghost: { step: staffStep(s), acc: s.acc, color: COL.bad } }; }
+            else col[o.ti] = { color: rw && (it.rb || []).includes(o.aj) ? COL.warn : COL.ok };
+          });
+          cell.innerHTML = staffSvg(it.t, it.d, mt, it.k, k => col[k] || {});
+        } else {
+          cell.innerHTML = staffSvg(null, it.d, mt, null, k => ({ color: it.n ? (it.h[k] ? COL.ok : COL.bad) : COL.muted }));
+        }
+      }
+      detail.hidden = !detail.hidden;
+    });
   });
 }
 
@@ -1379,12 +1761,12 @@ function csvOf(recs) {
   const maxQ = Math.max(0, ...recs.map(r => r.items.length));
   const esc = v => { v = String(v ?? ''); return /[;"\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
   const head = ['Ad Soyad', 'Numara', 'Tarih', 'Sınav kodu', 'Cevap', 'Puan (100)',
-    'Perde (100)', 'Ritim (100)', 'Ritim payı (%)',
+    'Perde (100)', 'Ritim (100)', 'Ezgide ritim payı (%)',
     ...Array.from({ length: maxQ }, (_, i) => `S${i + 1} (%)`)];
   const rows = recs.map(r => [
     r.name, r.no, new Date(r.date).toLocaleString('tr-TR'), r.code,
     r.cfg.answer === 'voice' ? 'ses' : 'piyano', r.score,
-    r.pitch ?? r.score, r.cfg.rw ? r.rhythm : '', r.cfg.rw || 0,
+    r.pitch ?? '', r.rhythm ?? '', r.cfg.rw || 0,
     ...r.items.map(it => Math.round(it.s * 100))
   ]);
   return '﻿' + [head, ...rows].map(r => r.map(esc).join(';')).join('\r\n');
@@ -1428,14 +1810,108 @@ function renderSaved() {
 function backToSetup() {
   $('exResult').hidden = true; $('exRun').hidden = true; $('exSetup').hidden = false;
   $('exName').value = ''; $('exNo').value = '';
-  renderSaved();
+  updateAdminUI();
 }
+
+/* =========================================================
+   ÖĞRETMEN (YÖNETİCİ) GİRİŞİ
+   Şifre oluşturulursa sınav ayarları, öğrenci bağlantısı ve sonuçlar yalnızca
+   öğretmen girişiyle görülür/değiştirilir. Öğretmenin ayarları bu bilgisayarda
+   saklanır; öğrenci bu ayarlarla sınava başlar. Şifre tuzlanıp özetlenerek
+   (PBKDF2) saklanır. Not: Koruma bu cihazın tarayıcısındadır; tarayıcı verilerini
+   silen biri kilidi kaldırabilir (o zaman sonuçlar da silinir).
+   ========================================================= */
+const ADM = { logged: false, mode: null };
+const hasAdmin = () => !!store.get('admin', null);
+const teacherAllowed = () => !hasAdmin() || ADM.logged;
+
+async function pwHash(pw, salt) {
+  if (window.crypto && crypto.subtle) {
+    const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: new TextEncoder().encode(salt), iterations: 150000, hash: 'SHA-256' }, k, 256);
+    return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Güvenli bağlam yoksa (çok nadir) basit özet
+  let h = salt + pw; for (let i = 0; i < 5000; i++) h = hashStr(h + i).toString(16) + h.slice(0, 32);
+  return h;
+}
+
+function updateAdminUI() {
+  const has = hasAdmin(), ok = teacherAllowed();
+  $('exAdminStatus').textContent = !has
+    ? 'Öğretmen şifresi yok: ayarları ve sonuçları bu bilgisayarı kullanan herkes görebilir.'
+    : ADM.logged ? '🔓 Öğretmen olarak giriş yapıldı.' : '🔒 Sınav ayarları ve sonuçlar öğretmen şifresiyle korunuyor.';
+  $('exAdminCreate').hidden = has;
+  $('exAdminLogin').hidden = !has || ADM.logged;
+  $('exAdminChange').hidden = !ADM.logged;
+  $('exAdminLogout').hidden = !ADM.logged;
+  $('exCfg').disabled = E.locked || !ok;
+  $('exTeacher').hidden = E.locked || !ok;
+  $('exSaved').hidden = !ok || (E.locked && !ADM.logged); // bağlantıyla gelen öğrenci sonuçları görmez
+  $('exPasteBox').hidden = E.locked;
+  $('exLockedNote').hidden = !(E.locked || !ok);
+  if (ok) renderSaved();
+}
+
+function openAdminForm(mode) {
+  ADM.mode = mode;
+  const f = $('exAdminForm');
+  f.hidden = false;
+  $('exAdminTitle').textContent = { create: 'Yeni öğretmen şifresi:', login: 'Öğretmen şifresi:', change: 'Yeni şifre:' }[mode];
+  $('exPw1').value = ''; $('exPw2').value = '';
+  $('exPw2').hidden = mode === 'login';
+  $('exAdminForgot').hidden = mode !== 'login';
+  $('exAdminMsg').textContent = '';
+  $('exPw1').focus();
+}
+function closeAdminForm() { $('exAdminForm').hidden = true; ADM.mode = null; }
+function adminLogout() { ADM.logged = false; closeAdminForm(); updateAdminUI(); }
+
+$('exAdminForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const p1 = $('exPw1').value, p2 = $('exPw2').value, msg = $('exAdminMsg');
+  if (ADM.mode === 'login') {
+    const a = store.get('admin', null);
+    if (a && await pwHash(p1, a.salt) === a.hash) {
+      ADM.logged = true; closeAdminForm(); updateAdminUI();
+      setMsg($('exSetupMsg'), '🔓 Öğretmen girişi yapıldı. Ayarlar bu bilgisayarda saklanır; işin bitince “Çıkış”a bas.', 'good');
+    } else { msg.textContent = 'Şifre yanlış.'; $('exPw1').select(); }
+    return;
+  }
+  if (p1.length < 4) { msg.textContent = 'Şifre en az 4 karakter olmalı.'; return; }
+  if (p1 !== p2) { msg.textContent = 'İki şifre aynı değil.'; return; }
+  const salt = randomCode() + randomCode();
+  store.set('admin', { salt, hash: await pwHash(p1, salt) });
+  const created = ADM.mode === 'create';
+  ADM.logged = true; closeAdminForm();
+  store.set('teacherCfg', readCfg());
+  updateAdminUI();
+  setMsg($('exSetupMsg'), created
+    ? '🔐 Öğretmen şifresi oluşturuldu. Artık ayarlar ve sonuçlar yalnızca bu şifreyle açılır. Şifreni unutma!'
+    : '🔐 Şifre değiştirildi.', 'good');
+});
+$('exAdminCreate').addEventListener('click', () => openAdminForm('create'));
+$('exAdminLogin').addEventListener('click', () => openAdminForm('login'));
+$('exAdminChange').addEventListener('click', () => openAdminForm('change'));
+$('exAdminLogout').addEventListener('click', () => { adminLogout(); setMsg($('exSetupMsg'), 'Öğretmen oturumu kapatıldı.'); });
+$('exAdminCancel').addEventListener('click', closeAdminForm);
+$('exAdminForgot').addEventListener('click', () => {
+  if (!confirm('Şifreyi sıfırlamak için bu bilgisayardaki BÜTÜN SINAV SONUÇLARI silinecek (öğrencilerin sonuçları görmesini önlemek için). Devam edilsin mi?')) return;
+  localStorage.removeItem('ert_admin');
+  store.set('exams', []);
+  ADM.logged = false; closeAdminForm(); updateAdminUI();
+  setMsg($('exSetupMsg'), 'Öğretmen şifresi ve sonuçlar silindi. İstersen yeni şifre oluşturabilirsin.', 'info');
+});
+// Öğretmenin ayarları bu bilgisayarda saklanır (öğrenci bu ayarlarla başlar)
+$('exCfg').addEventListener('change', () => { if (!E.locked && teacherAllowed()) store.set('teacherCfg', readCfg()); });
 
 /* --- Düğmeler --- */
 $('exStart').addEventListener('click', startExam);
 $('exPlay').addEventListener('click', examPlay);
+$('exGo').addEventListener('click', examGo);
 $('exRedo').addEventListener('click', examRedo);
 $('exNext').addEventListener('click', examNext);
+$('exTap').addEventListener('pointerdown', e => { e.preventDefault(); tap(); });
 $('exAgain').addEventListener('click', backToSetup);
 $('exPrint').addEventListener('click', () => window.print());
 $('exCsv').addEventListener('click', () => {
@@ -1443,6 +1919,7 @@ $('exCsv').addEventListener('click', () => {
 });
 $('exCsvAll').addEventListener('click', () => download('sinav-sonuclari.csv', csvOf(store.get('exams', []))));
 $('exClear').addEventListener('click', () => {
+  if (!teacherAllowed()) return;
   if (confirm('Bu bilgisayardaki bütün sınav sonuçları silinsin mi? Bu geri alınamaz.')) {
     store.set('exams', []); renderSaved();
   }
@@ -1460,12 +1937,8 @@ $('exLinkBtn').addEventListener('click', async () => {
 function lockToCfg(q) {
   writeCfg({ ...q, code: q.code || randomCode() });
   readCfg(); // değerleri doğrula/düzelt
-  $('exCfg').disabled = true;
-  $('exLockedNote').hidden = false;
-  $('exTeacher').hidden = true;
-  $('exSaved').hidden = true;
-  $('exPasteBox').hidden = true;
   E.locked = true;
+  updateAdminUI();
   setTab('exam');
 }
 
@@ -1483,12 +1956,14 @@ $('exPasteBtn').addEventListener('click', () => {
   $('exName').focus();
 });
 
-/* --- Başlangıç: bağlantıyla gelindiyse ayarları kilitle --- */
+/* --- Başlangıç: bağlantıyla gelindiyse ayarları kilitle; yoksa öğretmenin kayıtlı ayarları --- */
 (function initExam() {
   const q = cfgFromQuery();
-  if (q) lockToCfg(q);
+  if (q) { lockToCfg(q); return; }
+  const saved = store.get('teacherCfg', null);
+  if (saved) { writeCfg(saved); readCfg(); }
   else $('exCode').value = randomCode();
-  renderSaved();
+  updateAdminUI();
 })();
 
 /* =========================================================
@@ -1502,11 +1977,18 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Space') e.preventDefault();
   if (e.repeat) return;
 
-  if (activeTab === 'melody' || activeTab === 'exam') {
-    if (KEYMAP[e.code] !== undefined) pressNote(KEYMAP[e.code]);
-  } else {
+  // Sınavda ritim sorusu: Boşluk = vuruş, Enter = çalmaya başla
+  const examRhythm = activeTab === 'exam' && !$('exRun').hidden && isRhythm(exItem());
+  if (activeTab === 'rhythm' || examRhythm) {
     if (e.code === 'Space') tap();
-    else if (e.key === 'Enter' && R.slots.length) { e.preventDefault(); runRhythm('record'); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (examRhythm) examGo();
+      else if (R.durs.length && R.phase === 'idle') runRhythm('record');
+    }
+  } else {
+    if (KEYMAP[e.code] !== undefined) pressNote(60 + kbOctave + KEYMAP[e.code]);
+    else if (e.code === 'KeyZ' || e.code === 'KeyX') { kbOctave = e.code === 'KeyX' ? 12 : 0; markKbOctave(); }
   }
 });
 document.addEventListener('keyup', e => { if (e.code === 'Space') e.preventDefault(); });

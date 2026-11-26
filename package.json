@@ -1,7 +1,7 @@
 {
   "name": "ezgi-ritim",
   "productName": "Ezgi ve Ritim",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Kulak eğitimi: ezgi ve ritim tekrarı, sesle cevap ve sınav",
   "author": "gryflute-ui",
   "main": "main.js",
@@ -26,6 +26,7 @@
       "main.js",
       "index.html",
       "app.js",
+      "notation.js",
       "style.css",
       "simge.png"
     ],
